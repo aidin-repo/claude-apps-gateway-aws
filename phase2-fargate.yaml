@@ -1,0 +1,602 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Claude apps gateway on ECS Fargate behind an internal IPv4 ALB (wildcard ACM cert),
+  RDS Postgres store, Bedrock via task role, secrets in Secrets Manager, an S3-hosted
+  gateway config, and a Route 53 alias. Proof of concept; supply your own VPC, subnets,
+  certificate, hosted zone, hostname, and image URI at deploy time.
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Description: >
+      Prefix threaded through every user-visible resource name (secrets, bucket, ALB, TG, RDS,
+      cluster, service, task family, log groups, dashboard). Lets you run parallel stacks in the
+      same account+region (e.g. `claude-gateway` for prod, `claude-gateway-test` for a test copy).
+      Must be 1-19 characters, lowercase alphanumeric + hyphens, no leading/trailing hyphen —
+      keeps ALB (max 32) and other name-length limits satisfied when suffixes are appended.
+    MinLength: 1
+    MaxLength: 19
+    AllowedPattern: '^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$'
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC to deploy into. Must give the internal ALB private IPs.
+  # VpcCidr is intentionally NOT a CFN parameter here — deploy.sh threads $VPC_CIDR into
+  # gateway.yaml.template via envsubst (for trusted_proxies), and into client-vpn.yaml as its
+  # own CFN parameter. Duplicating it here would silently drift on VPC changes.
+  SubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Description: First subnet for the ALB, tasks, and RDS.
+  SubnetB:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second subnet in a different AZ.
+  CertificateArn:
+    Type: String
+    Description: ACM cert ARN for the gateway hostname (e.g. a *.internal.example.com wildcard).
+  HostedZoneId:
+    Type: String
+    Description: Route 53 PRIVATE hosted zone id for the gateway hostname.
+  GatewayHostname:
+    Type: String
+    Description: Gateway FQDN; must resolve to a private IP (e.g. claude-gateway.internal.example.com).
+  ImageUri:
+    Type: String
+    Description: Gateway image URI, e.g. <ACCOUNT_ID>.dkr.ecr.<region>.amazonaws.com/claude-gateway:v4
+  OidcClientId:
+    Type: String
+    NoEcho: true
+    Description: OIDC confidential-web-app client id from your IdP (populates claude-gateway/oidc secret).
+  OidcClientSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+    Description: OIDC confidential-web-app client secret (populates claude-gateway/oidc secret; cannot be REPLACE_ME).
+  OtelCollectorTag:
+    Type: String
+    Description: Pinned aws-otel-collector image tag (do not use latest in production, e.g. v0.42.0).
+    AllowedPattern: '^[A-Za-z0-9._-]+$'
+  PostgresVersion:
+    Type: String
+    Default: '16'
+  DbBackupRetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 0
+    MaxValue: 35
+    Description: RDS BackupRetentionPeriod (days). Set >0 for real recovery; 0 disables snapshots (POC only).
+
+Resources:
+
+  # ---------- Secrets ----------
+  JwtSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/jwt-secret'
+      Description: HS256 signing secret for gateway bearer tokens
+      GenerateSecretString:
+        PasswordLength: 44
+        ExcludePunctuation: true
+
+  DbPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/db-password'
+      Description: RDS Postgres master password for the gateway store
+      GenerateSecretString:
+        PasswordLength: 30
+        ExcludePunctuation: true
+
+  # Populated at deploy time from the OidcClientId + OidcClientSecret NoEcho parameters.
+  # Ships with the real values from the first CREATE, so the stack cannot report success
+  # with a non-functional /login (as the old REPLACE_ME placeholder path allowed).
+  OidcSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/oidc'
+      Description: OIDC confidential web app client_id/client_secret (populated at deploy time)
+      SecretString: !Sub '{"client_id":"${OidcClientId}","client_secret":"${OidcClientSecret}"}'
+
+  # Admin API write key for managing spend limits (injected as GATEWAY_ADMIN_WRITE_KEY).
+  # For human admins prefer admin_groups in gateway.yaml (SSO-based, no shared key); this key
+  # is for automation (Terraform/CI/scripts).
+  AdminWriteKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${NamePrefix}/admin-write-key'
+      Description: Admin API write key for the gateway spend-limits API
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+
+  # ---------- Config bucket ----------
+  # gateway.yaml lives here and is fetched by the container at startup. To apply
+  # a settings/model-permission change: edit gateway.yaml, `aws s3 cp` it here,
+  # then force a new ECS deployment. No image rebuild needed.
+  ConfigBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName: !Sub '${NamePrefix}-config-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+
+  # Deny any non-TLS access to the config object (defence in depth for a security-control artifact).
+  ConfigBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ConfigBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt ConfigBucket.Arn
+              - !Sub '${ConfigBucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+
+  # ---------- Security groups (linear deps: Alb <- Task <- Db) ----------
+  # No inline ingress: the gateway is reachable only via the Client VPN, whose stack adds a
+  # narrow :443 rule scoped to the VPN client CIDR. (For an in-VPC client instead of VPN, add
+  # your own scoped ingress here.)
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${NamePrefix} ALB - ingress added out-of-band by the Client VPN stack'
+      VpcId: !Ref VpcId
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${NamePrefix} Fargate tasks - allow 8080 from ALB'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+          Description: Gateway HTTP from ALB
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${NamePrefix} RDS - allow 5432 from Fargate tasks'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref TaskSecurityGroup
+          Description: Postgres from gateway tasks
+
+  # ---------- RDS Postgres ----------
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub '${NamePrefix} db subnets'
+      SubnetIds:
+        - !Ref SubnetA
+        - !Ref SubnetB
+
+  # DeletionPolicy: Snapshot ensures a routine engine-version bump (which triggers replacement)
+  # cannot destroy the DB without leaving a recovery snapshot behind. teardown.sh warns the user
+  # that a snapshot is retained.
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${NamePrefix}-db'
+      Engine: postgres
+      EngineVersion: !Ref PostgresVersion
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: '20'
+      StorageType: gp3
+      StorageEncrypted: true
+      DBName: gateway
+      MasterUsername: gwadmin
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DbPasswordSecret}:SecretString}}'
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DbSecurityGroup
+      PubliclyAccessible: false
+      # POC defaults — production should also set MultiAZ: true.
+      MultiAZ: false
+      BackupRetentionPeriod: !Ref DbBackupRetentionDays
+
+  # ---------- ALB ----------
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${NamePrefix}-alb'
+      Type: application
+      Scheme: internal
+      IpAddressType: ipv4
+      Subnets:
+        - !Ref SubnetA
+        - !Ref SubnetB
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '4000'
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${NamePrefix}-tg'
+      TargetType: ip
+      Protocol: HTTP
+      Port: 8080
+      VpcId: !Ref VpcId
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /healthz
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '10'
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ---------- DNS ----------
+  DnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref GatewayHostname
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt LoadBalancer.DNSName
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+        EvaluateTargetHealth: false
+
+  # ---------- ECS ----------
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${NamePrefix}'
+      RetentionInDays: 14
+
+  # EMF metrics land here: the ADOT collector's awsemf exporter writes embedded-metric-format
+  # log events, from which CloudWatch extracts metrics under the ClaudeCode namespace.
+  MetricsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/claude-code/${NamePrefix}-metrics'
+      RetentionInDays: 30
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref NamePrefix
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref JwtSecret
+                  - !Ref DbPasswordSecret
+                  - !Ref OidcSecret
+                  - !Ref AdminWriteKeySecret
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: bedrock-invoke
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.anthropic.*
+                  - arn:aws:bedrock:*::foundation-model/anthropic.*
+        - PolicyName: read-config
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${ConfigBucket.Arn}/gateway.yaml'
+        # The ADOT collector sidecar uses the task role to publish metrics to CloudWatch, both to
+        # the OTLP-native endpoint (otlphttp + SigV4 -> monitoring.<region>.amazonaws.com, which is
+        # authorized by cloudwatch:PutMetricData) and as EMF to the ClaudeCode namespace.
+        # PutMetricData is unconditional because OTLP-ingested metrics do not carry the custom
+        # namespace that a cloudwatch:namespace condition would match.
+        # PutMetricData is scoped by namespace so a compromised task role cannot pollute other
+        # namespaces (AWS/*, application metrics from unrelated services). OTLP-ingested metrics
+        # carry the ClaudeCode namespace via the EMF exporter's `namespace: ClaudeCode` in
+        # AOT_CONFIG_CONTENT — keep this condition and that setting in lock-step.
+        - PolicyName: cloudwatch-telemetry
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: ClaudeCode
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                  - logs:DescribeLogGroups
+                Resource:
+                  - !GetAtt MetricsLogGroup.Arn
+                  - !Sub '${MetricsLogGroup.Arn}:*'
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref NamePrefix
+      Cpu: '512'
+      Memory: '2048'   # room for the gateway + ADOT collector sidecar
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: gateway
+          Image: !Ref ImageUri
+          Essential: true
+          # Wait for the collector to start so the first telemetry exports have somewhere to land.
+          DependsOn:
+            - ContainerName: otel-collector
+              Condition: START
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          Environment:
+            - Name: GATEWAY_POSTGRES_URL
+              Value: !Sub 'postgres://${Database.Endpoint.Address}:5432/gateway?sslmode=require'
+            - Name: CLAUDE_GATEWAY_LOG_LEVEL
+              Value: info
+            - Name: GATEWAY_CONFIG_S3_URI
+              Value: !Sub 's3://${ConfigBucket}/gateway.yaml'
+            # The gateway's SSRF guard blocks loopback by default; allow it so telemetry can be
+            # relayed to the ADOT collector sidecar over localhost:4318 (same task, shared netns).
+            # Link-local / cloud-metadata addresses stay blocked.
+            - Name: CLAUDE_GATEWAY_ALLOW_LOOPBACK
+              Value: '1'
+          Secrets:
+            - Name: OIDC_CLIENT_ID
+              ValueFrom: !Sub '${OidcSecret}:client_id::'
+            - Name: OIDC_CLIENT_SECRET
+              ValueFrom: !Sub '${OidcSecret}:client_secret::'
+            - Name: GATEWAY_JWT_SECRET
+              ValueFrom: !Ref JwtSecret
+            - Name: GATEWAY_DB_PASSWORD
+              ValueFrom: !Ref DbPasswordSecret
+            - Name: GATEWAY_ADMIN_WRITE_KEY
+              ValueFrom: !Ref AdminWriteKeySecret
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: gateway
+
+        # ADOT collector sidecar. Receives OTLP/HTTP on localhost:4318 (the gateway relays each
+        # signed-in client's telemetry here via telemetry.forward_to in gateway.yaml) and dual-exports:
+        #   - otlphttp -> CloudWatch OTLP endpoint (monitoring.<region>.amazonaws.com) via SigV4.
+        #     These are queryable with PromQL (labels via @resource.*) and back the dashboard below.
+        #   - awsemf   -> ClaudeCode namespace (classic CloudWatch metrics, 15-month retention/alarms).
+        # Two independent pipelines so a failing OTLP export can't stall the EMF path or the receiver.
+        # Non-essential: if the collector crashes, inference keeps flowing.
+        # Config is passed inline via AOT_CONFIG_CONTENT so no SSM parameter or extra file is needed.
+        - Name: otel-collector
+          Image: !Sub public.ecr.aws/aws-observability/aws-otel-collector:${OtelCollectorTag}
+          Essential: false
+          PortMappings:
+            - ContainerPort: 4318
+              Protocol: tcp
+          Environment:
+            - Name: AOT_CONFIG_CONTENT
+              Value: !Sub |
+                extensions:
+                  sigv4auth:
+                    service: monitoring
+                    region: ${AWS::Region}
+                receivers:
+                  otlp:
+                    protocols:
+                      http:
+                        endpoint: 0.0.0.0:4318
+                processors:
+                  batch: {}
+                exporters:
+                  otlphttp:
+                    endpoint: https://monitoring.${AWS::Region}.amazonaws.com
+                    auth:
+                      authenticator: sigv4auth
+                    retry_on_failure:
+                      enabled: false
+                    sending_queue:
+                      enabled: true
+                      queue_size: 1000
+                  awsemf:
+                    region: ${AWS::Region}
+                    namespace: ClaudeCode
+                    log_group_name: ${MetricsLogGroup}
+                    log_stream_name: gateway
+                    dimension_rollup_option: NoDimensionRollup
+                    resource_to_telemetry_conversion:
+                      enabled: true
+                service:
+                  extensions: [sigv4auth]
+                  telemetry:
+                    logs:
+                      level: warn
+                  pipelines:
+                    metrics/emf:
+                      receivers: [otlp]
+                      processors: [batch]
+                      exporters: [awsemf]
+                    metrics/otlp:
+                      receivers: [otlp]
+                      processors: [batch]
+                      exporters: [otlphttp]
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: otel-collector
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - HttpsListener
+      - Database
+    Properties:
+      ServiceName: !Ref NamePrefix
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      HealthCheckGracePeriodSeconds: 300
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          # POC: tasks run in the given subnets with a public IP so they can reach ECR/S3/Bedrock
+          # without a NAT gateway. For production, use private subnets + NAT (or VPC endpoints)
+          # and set AssignPublicIp: DISABLED. Inbound is still restricted to the ALB SG.
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref SubnetA
+            - !Ref SubnetB
+          SecurityGroups:
+            - !Ref TaskSecurityGroup
+      LoadBalancers:
+        - TargetGroupArn: !Ref TargetGroup
+          ContainerName: gateway
+          ContainerPort: 8080
+
+  # ---------- Dashboard ----------
+  # Deploys with the stack so operators get a working view out of the box. Widgets query the
+  # OTLP-native metrics (PromQL, @resource.service.name="claude-code") the collector ships, plus
+  # AWS/Bedrock service health. Panels populate once a signed-in developer generates telemetry.
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${NamePrefix}-dashboard'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            { "type": "text", "x": 0, "y": 0, "width": 24, "height": 2, "properties": { "markdown": "# Claude Code on Bedrock - Gateway Telemetry\nPer-user usage, cost, and productivity via the Claude apps gateway. Metrics are ingested through the CloudWatch OTLP endpoint and identity-stamped by the gateway (user.email, model).", "background": "transparent" } },
+
+            { "type": "chart", "x": 0, "y": 2, "width": 6, "height": 4, "properties": { "title": "Total Cost (USD)", "view": "number", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.cost.usage\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "USD" } ] }, "plotOptions": { "style": { "numberOptions": { "sparkline": true } } } } },
+            { "type": "chart", "x": 6, "y": 2, "width": 6, "height": 4, "properties": { "title": "Total Tokens", "view": "number", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.token.usage\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Tokens" } ] }, "plotOptions": { "style": { "numberOptions": { "sparkline": true } } } } },
+            { "type": "chart", "x": 12, "y": 2, "width": 6, "height": 4, "properties": { "title": "Active Users", "view": "number", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "count(group by (\"user.email\")({\"claude_code.session.count\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60, "label": "Users" } ] }, "plotOptions": { "style": { "numberOptions": { "sparkline": true } } } } },
+            { "type": "chart", "x": 18, "y": 2, "width": 6, "height": 4, "properties": { "title": "Cache Hit Rate (%)", "view": "number", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.token.usage\", type=\"cacheRead\", \"@resource.service.name\"=\"claude-code\"}) / sum({\"claude_code.token.usage\", \"@resource.service.name\"=\"claude-code\"}) * 100", "step": 60, "label": "%" } ] }, "plotOptions": { "style": { "numberOptions": { "sparkline": true } } } } },
+
+            { "type": "text", "x": 0, "y": 6, "width": 24, "height": 1, "properties": { "markdown": "## Cost", "background": "transparent" } },
+            { "type": "chart", "x": 0, "y": 7, "width": 8, "height": 6, "properties": { "title": "Cost Over Time (USD)", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.cost.usage\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Total USD" } ] }, "plotOptions": { "style": { "lineOptions": { "filled": true } } } } },
+            { "type": "chart", "x": 8, "y": 7, "width": 8, "height": 6, "properties": { "title": "Cost by Model (USD)", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "topk(20, sum by (model)({\"claude_code.cost.usage\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60 } ] }, "plotOptions": { "style": { "lineOptions": { "stacked": true } } } } },
+            { "type": "chart", "x": 16, "y": 7, "width": 8, "height": 6, "properties": { "title": "Top Users by Cost (USD)", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "topk(20, sum by (\"user.email\")({\"claude_code.cost.usage\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60 } ] } } },
+
+            { "type": "text", "x": 0, "y": 13, "width": 24, "height": 1, "properties": { "markdown": "## Tokens", "background": "transparent" } },
+            { "type": "chart", "x": 0, "y": 14, "width": 8, "height": 6, "properties": { "title": "Tokens by Type", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "in", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.token.usage\", type=\"input\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Input" }, { "id": "out", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.token.usage\", type=\"output\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Output" }, { "id": "cr", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.token.usage\", type=\"cacheRead\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Cache Read" }, { "id": "cc", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.token.usage\", type=\"cacheCreation\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Cache Creation" } ] } } },
+            { "type": "chart", "x": 8, "y": 14, "width": 8, "height": 6, "properties": { "title": "Tokens by Model", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "topk(20, sum by (model)({\"claude_code.token.usage\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60 } ] }, "plotOptions": { "style": { "lineOptions": { "stacked": true } } } } },
+            { "type": "chart", "x": 16, "y": 14, "width": 8, "height": 6, "properties": { "title": "Top Users by Tokens", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "topk(20, sum by (\"user.email\")({\"claude_code.token.usage\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60 } ] } } },
+
+            { "type": "text", "x": 0, "y": 20, "width": 24, "height": 1, "properties": { "markdown": "## Developer Productivity", "background": "transparent" } },
+            { "type": "chart", "x": 0, "y": 21, "width": 6, "height": 6, "properties": { "title": "Lines of Code", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "add", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.lines_of_code.count\", type=\"added\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Added" }, { "id": "rem", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.lines_of_code.count\", type=\"removed\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Removed" } ] } } },
+            { "type": "chart", "x": 6, "y": 21, "width": 6, "height": 6, "properties": { "title": "Commits", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.commit.count\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Commits" } ] }, "plotOptions": { "style": { "lineOptions": { "filled": true } } } } },
+            { "type": "chart", "x": 12, "y": 21, "width": 6, "height": 6, "properties": { "title": "Pull Requests", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.pull_request.count\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "PRs" } ] }, "plotOptions": { "style": { "lineOptions": { "filled": true } } } } },
+            { "type": "chart", "x": 18, "y": 21, "width": 6, "height": 6, "properties": { "title": "Active Hours", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.active_time.total\", \"@resource.service.name\"=\"claude-code\"}) / 3600", "step": 60, "label": "Hours" } ] }, "plotOptions": { "style": { "lineOptions": { "filled": true } } } } },
+
+            { "type": "text", "x": 0, "y": 27, "width": 24, "height": 1, "properties": { "markdown": "## Code Edits", "background": "transparent" } },
+            { "type": "chart", "x": 0, "y": 28, "width": 8, "height": 6, "properties": { "title": "Edit Decisions (accept vs reject)", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "topk(20, sum by (decision)({\"claude_code.code_edit_tool.decision\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60 } ] } } },
+            { "type": "chart", "x": 8, "y": 28, "width": 8, "height": 6, "properties": { "title": "Edits by Tool", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "topk(20, sum by (tool_name)({\"claude_code.code_edit_tool.decision\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60 } ] } } },
+            { "type": "chart", "x": 16, "y": 28, "width": 8, "height": 6, "properties": { "title": "Code Generation by Language", "view": "pie", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "topk(20, sum by (language)({\"claude_code.code_edit_tool.decision\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60 } ] } } },
+
+            { "type": "text", "x": 0, "y": 34, "width": 24, "height": 1, "properties": { "markdown": "## Bedrock API Health", "background": "transparent" } },
+            { "type": "metric", "x": 0, "y": 35, "width": 6, "height": 6, "properties": { "title": "Bedrock Throttles by Model", "view": "timeSeries", "stacked": false, "region": "${AWS::Region}", "period": 300, "yAxis": { "left": { "min": 0 } }, "metrics": [ [ { "expression": "SELECT SUM(InvocationThrottles) FROM \"AWS/Bedrock\" GROUP BY ModelId", "id": "throttles", "region": "${AWS::Region}" } ] ] } },
+            { "type": "metric", "x": 6, "y": 35, "width": 6, "height": 6, "properties": { "title": "Bedrock Client Errors by Model", "view": "timeSeries", "stacked": false, "region": "${AWS::Region}", "period": 300, "yAxis": { "left": { "min": 0 } }, "metrics": [ [ { "expression": "SELECT SUM(InvocationClientErrors) FROM \"AWS/Bedrock\" GROUP BY ModelId", "id": "clienterrors", "region": "${AWS::Region}" } ] ] } },
+            { "type": "metric", "x": 12, "y": 35, "width": 6, "height": 6, "properties": { "title": "Bedrock Server Errors by Model", "view": "timeSeries", "stacked": false, "region": "${AWS::Region}", "period": 300, "yAxis": { "left": { "min": 0 } }, "metrics": [ [ { "expression": "SELECT SUM(InvocationServerErrors) FROM \"AWS/Bedrock\" GROUP BY ModelId", "id": "servererrors", "region": "${AWS::Region}" } ] ] } },
+            { "type": "metric", "x": 18, "y": 35, "width": 6, "height": 6, "properties": { "title": "Bedrock Invocation Latency (avg ms)", "view": "timeSeries", "stacked": false, "region": "${AWS::Region}", "period": 300, "yAxis": { "left": { "min": 0 } }, "metrics": [ [ { "expression": "SELECT AVG(InvocationLatency) FROM \"AWS/Bedrock\" GROUP BY ModelId", "id": "latency", "region": "${AWS::Region}" } ] ] } }
+          ]
+        }
+
+Outputs:
+  GatewayUrl:
+    Value: !Sub 'https://${GatewayHostname}'
+  AlbDnsName:
+    Value: !GetAtt LoadBalancer.DNSName
+  OidcSecretArn:
+    Value: !Ref OidcSecret
+  AdminWriteKeySecretArn:
+    Value: !Ref AdminWriteKeySecret
+    Description: Fetch the admin API write key with aws secretsmanager get-secret-value on this ARN
+  DbEndpoint:
+    Value: !GetAtt Database.Endpoint.Address
+  ConfigBucket:
+    Value: !Ref ConfigBucket
+    Description: Upload gateway.yaml here then force-new-deployment to apply config changes
+  AlbSecurityGroupId:
+    Value: !Ref AlbSecurityGroup
+    Description: Internal ALB security group id (consumed by the Client VPN stack)
+    Export:
+      # Keyed on AWS::StackName so each parallel stack gets a unique export automatically.
+      # client-vpn.yaml imports this via its GatewayStackName parameter.
+      Name: !Sub '${AWS::StackName}-AlbSecurityGroupId'
+  DashboardUrl:
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards/dashboard/${NamePrefix}-dashboard'
+    Description: CloudWatch dashboard for gateway usage, cost, and Bedrock health

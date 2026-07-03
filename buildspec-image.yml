@@ -1,0 +1,33 @@
+version: 0.2
+
+# Builds the Claude apps gateway container image and pushes it to ECR — for environments with no
+# local Docker. Use in a privileged Linux CodeBuild project (PrivilegedMode: true) with a NO_SOURCE
+# source, so no source repo is required: the Dockerfile and entrypoint.sh are passed in as base64
+# environment variables at build start.
+#
+# Required env vars (pass via --environment-variables-override on `aws codebuild start-build`):
+#   ECR_URI          e.g. <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/claude-gateway
+#   TAG              image tag, e.g. v4
+#   DOCKERFILE_B64   base64 of ./Dockerfile     ($(base64 -i Dockerfile))
+#   ENTRYPOINT_B64   base64 of ./entrypoint.sh  ($(base64 -i entrypoint.sh))
+#
+# gateway.yaml is intentionally NOT baked into the image — the container fetches it from S3 at
+# startup and fails hard if the fetch fails (see entrypoint.sh + gateway.yaml.template).
+#
+# CodeBuild service role needs: ecr:GetAuthorizationToken (resource *), ECR push on the repo
+# (BatchCheckLayerAvailability, InitiateLayerUpload, UploadLayerPart, CompleteLayerUpload, PutImage),
+# and CloudWatch Logs.
+
+phases:
+  pre_build:
+    commands:
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "${ECR_URI%/*}"
+      - echo "$DOCKERFILE_B64" | base64 -d > Dockerfile
+      - echo "$ENTRYPOINT_B64" | base64 -d > entrypoint.sh
+      - chmod +x entrypoint.sh
+  build:
+    commands:
+      - docker build --platform linux/amd64 -t "$ECR_URI:$TAG" .
+  post_build:
+    commands:
+      - docker push "$ECR_URI:$TAG"

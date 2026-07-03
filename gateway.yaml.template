@@ -1,0 +1,95 @@
+# Claude apps gateway config TEMPLATE. deploy.sh renders this via envsubst with an explicit
+# allowlist (HOSTNAME_FQDN, VPC_CIDR, OIDC_ISSUER, EMAIL_DOMAIN, BEDROCK_REGION, ADMIN_GROUP)
+# and uploads the rendered file to S3. The other placeholders are resolved at runtime by the
+# gateway binary from environment variables injected by the ECS task definition (secrets from
+# Secrets Manager). NEVER commit a rendered copy.
+
+listen:
+  host: 0.0.0.0
+  port: 8080
+  # Internal ALB origin. Must resolve to a private IP (the CLI /login check requires it).
+  public_url: https://${HOSTNAME_FQDN}
+  # VPC CIDR so the gateway reads the real client IP behind the ALB. To tighten, replace this
+  # with just the ALB subnet CIDR(s) so a same-VPC host can't spoof X-Forwarded-For.
+  trusted_proxies: [${VPC_CIDR}]
+
+oidc:
+  # OIDC IdP issuer (must serve /.well-known/openid-configuration).
+  issuer: ${OIDC_ISSUER}
+  client_id: ${OIDC_CLIENT_ID}
+  client_secret: ${OIDC_CLIENT_SECRET}
+  allowed_email_domains: [${EMAIL_DOMAIN}]
+  # Needed for IdPs whose id_token omits email/groups (e.g. an Okta org authorization server);
+  # the gateway then fills them from the userinfo endpoint.
+  userinfo_fallback: true
+  # 'groups' is only emitted when requested AND allowed by the app's groups claim filter.
+  # Needed for managed.policies group matching.
+  scopes: [openid, profile, email, offline_access, groups]
+
+session:
+  jwt_secret: ${GATEWAY_JWT_SECRET}   # generate with: openssl rand -base64 32
+  ttl_hours: 8                        # also bounds deprovision latency
+
+store:
+  postgres_url: ${GATEWAY_POSTGRES_URL}   # postgres://<host>:5432/gateway?sslmode=require (no creds)
+  username: gwadmin                       # creds kept out of the URL
+  password: ${GATEWAY_DB_PASSWORD}
+
+upstreams:
+  - provider: bedrock
+    region: ${BEDROCK_REGION}
+    auth: {}   # empty: AWS default credential chain (the ECS task role in the deployed stack)
+
+# Spend limits (per-user/group/org caps). This block enables the Admin API + enforcement; the
+# caps themselves are set at runtime via POST /v1/organizations/spend_limits (see the helper
+# script manage-spend-limits.sh), not here.
+admin:
+  # Static key for automation (Terraform/CI/scripts). Injected from Secrets Manager as an env var
+  # by the deployed stack — never write the literal key here.
+  write_keys:
+    - { id: automation, key: "${GATEWAY_ADMIN_WRITE_KEY}" }
+  # Preferred for humans: members of these IdP groups manage caps with their own SSO session
+  # (no shared key). Set to your admin group name(s).
+  admin_groups: [${ADMIN_GROUP}]
+  blocked_message: "Spend cap reached - contact your admin to raise it."
+
+# The built-in catalog auto-maps the Claude models this gateway binary knows
+# (e.g. claude-opus-4-7 -> us.anthropic.claude-opus-4-7). Models newer than the
+# pinned binary are not in that catalog, so add them explicitly below.
+auto_include_builtin_models: true
+models:
+  - id: claude-sonnet-5
+    label: Claude Sonnet 5
+    upstream_model:
+      bedrock: us.anthropic.claude-sonnet-5
+
+# Per-group access control (RBAC). Uncomment and set groups to your IdP group names. The `groups`
+# OIDC scope above is requested specifically so these match. availableModels is enforced
+# server-side (a denied model returns 400) as well as filtering the client's model picker.
+# managed:
+#   policies:
+#     - match: { groups: [eng-contractors] }
+#       cli:
+#         availableModels: [claude-haiku-4-5]
+#         enforceAvailableModels: true
+#         permissions: { deny: ["WebFetch", "WebSearch"] }
+#     - match: {}                     # catch-all: everyone else
+#       cli:
+#         availableModels: [claude-opus-4-8, claude-sonnet-5, claude-haiku-4-5]
+
+# Telemetry: relay each signed-in client's OTLP metrics to the ADOT collector sidecar in the same
+# Fargate task, which dual-exports to CloudWatch: OTLP-native (PromQL-queryable, backs the
+# deployed dashboard) plus the ClaudeCode EMF namespace. Enabling this (together with
+# listen.public_url above) makes the gateway push OTEL_* env to every client, so laptops send
+# metrics to the gateway automatically with no developer-side setup. The pushed OTEL endpoint is a
+# non-safe-list var, so each interactive client sees a one-time approval dialog on next startup.
+# NOTE: the deployed stack sets CLAUDE_GATEWAY_ALLOW_LOOPBACK=1 on the gateway container so its
+# SSRF guard permits this localhost relay to the sidecar.
+# Metrics only by default; logs/traces can carry commands and file paths, so leave them off unless
+# the destination's access controls warrant it.
+telemetry:
+  forward_to:
+    - url: http://localhost:4318   # the collector sidecar (same task); gateway appends /v1/metrics
+      metrics: true
+      logs: false
+      traces: false

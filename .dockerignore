@@ -1,0 +1,5 @@
+# Only Dockerfile + entrypoint.sh need to enter the build context.
+# Everything else is either secret material, IaC, or docs.
+*
+!Dockerfile
+!entrypoint.sh

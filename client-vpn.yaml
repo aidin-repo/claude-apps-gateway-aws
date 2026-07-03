@@ -1,0 +1,115 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AWS Client VPN (mutual cert auth, split-tunnel) so a laptop Claude Code CLI can reach the
+  internal gateway ALB privately with no SSM tunnel. The server cert is generated and imported
+  to ACM out-of-band (see the README). Proof of concept; supply your own VPC, subnet, and server
+  cert ARN at deploy time. The gateway's ALB security group id is imported from the gateway stack
+  (deploy that stack first).
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Description: >
+      Prefix threaded through user-visible resource names (VPN endpoint description,
+      log group). Should match the NamePrefix passed to the gateway stack whose ALB
+      security group this stack authorizes. Length + character rules identical to the
+      gateway stack.
+    MinLength: 1
+    MaxLength: 19
+    AllowedPattern: '^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$'
+  GatewayStackName:
+    Type: String
+    Description: >
+      Name of the sibling gateway stack (its AWS::StackName). Used to construct the
+      Fn::ImportValue for its ALB security group export (<gateway-stack-name>-AlbSecurityGroupId).
+    MinLength: 1
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Same VPC as the gateway stack.
+  VpcCidr:
+    Type: String
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    Description: >
+      CIDR authorized for VPN clients to reach. Must match the gateway stack's VpcCidr, or
+      connected clients cannot reach the ALB and there is no obvious log line explaining why.
+      (No default — supply the real VPC CIDR.)
+  SubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet to associate with the Client VPN endpoint.
+  ServerCertArn:
+    Type: String
+    Description: ACM ARN of the VPN server cert (also used as the client root CA chain).
+  ClientCidr:
+    Type: String
+    Default: 10.100.0.0/22
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    Description: Address pool handed to VPN clients (must not overlap the VPC).
+
+Resources:
+  # Connection audit trail for the only path into the gateway.
+  VpnLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/clientvpn/${NamePrefix}'
+      RetentionInDays: 30
+
+  VpnSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${NamePrefix} Client VPN endpoint ENIs - egress to VPC'
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  ClientVpnEndpoint:
+    Type: AWS::EC2::ClientVpnEndpoint
+    Properties:
+      Description: !Sub '${NamePrefix} client vpn'
+      ClientCidrBlock: !Ref ClientCidr
+      VpcId: !Ref VpcId
+      SecurityGroupIds: [!Ref VpnSecurityGroup]
+      TransportProtocol: udp
+      VpnPort: 443
+      SplitTunnel: true
+      ServerCertificateArn: !Ref ServerCertArn
+      AuthenticationOptions:
+        - Type: certificate-authentication
+          MutualAuthentication:
+            ClientRootCertificateChainArn: !Ref ServerCertArn
+      ConnectionLogOptions:
+        Enabled: true
+        CloudwatchLogGroup: !Ref VpnLogGroup
+
+  TargetAssociation:
+    Type: AWS::EC2::ClientVpnTargetNetworkAssociation
+    Properties:
+      ClientVpnEndpointId: !Ref ClientVpnEndpoint
+      SubnetId: !Ref SubnetA
+
+  AuthRule:
+    Type: AWS::EC2::ClientVpnAuthorizationRule
+    Properties:
+      ClientVpnEndpointId: !Ref ClientVpnEndpoint
+      # POC authorizes the whole VPC CIDR. To tighten, set this to the ALB subnet CIDR(s) so
+      # VPN clients can only reach the gateway subnets, not the entire VPC.
+      TargetNetworkCidr: !Ref VpcCidr
+      AuthorizeAllGroups: true
+
+  # Client VPN source-NATs client traffic to the VPN endpoint's ENI IP in the associated subnet
+  # (a VPC address), NOT the client CIDR. So the ALB must allow the VPN endpoint's security group,
+  # not ClientCidr. The ALB SG id is imported from the gateway stack.
+  AlbIngressFromVpn:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Fn::ImportValue: !Sub '${GatewayStackName}-AlbSecurityGroupId'
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref VpnSecurityGroup
+      Description: !Sub 'HTTPS from the ${NamePrefix} Client VPN endpoint ENIs'
+
+Outputs:
+  ClientVpnEndpointId:
+    Value: !Ref ClientVpnEndpoint
