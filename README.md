@@ -253,6 +253,12 @@ The common alternative is client-side STS federation: each laptop federates to S
 - OIDC only, one issuer per gateway. No SAML, no LDAP. Browser device flow only, so no CI or service-token path.
 - Linux server only.
 
+## Conclusion
+
+We took Claude Code from a "credentials on every laptop" setup to a single governed entry point. One gateway now holds the only AWS credential, authenticates every developer through your existing SSO, enforces which models they can call, and meters their spend, all while keeping traffic on a private network path. The footprint stays deliberately small (one container and a Postgres instance), the configuration is a file you edit and re-upload rather than a redeploy, and the whole thing tears back down to a near-zero bill between demos.
+
+If you're weighing how to give a team Claude Code on Bedrock without hand-managing STS credentials or building your own quota system, this pattern is worth a look. Clone the repo, run `bash deploy.sh init`, and you can be serving traffic in well under an hour; `bash teardown.sh` gives it all back when you're done. If you build on it or hit a rough edge, feedback and pull requests are welcome.
+
 ## What's in the repo
 
 - `deploy.env.example` — copy to `deploy.env` and fill in.
@@ -267,3 +273,28 @@ The common alternative is client-side STS federation: each laptop federates to S
 - `teardown.sh` — reversal, with secrets-before-stack ordering and a bounded waiter.
 - `lib/init.sh` — interactive AWS discovery and prompts, generates `deploy.env`.
 - `lib/preflight.sh` — the read-only preflight checks (also runnable on its own).
+
+## Further reading and references
+
+**Claude Code and the gateway**
+- [Claude apps gateway](https://code.claude.com/docs/en/claude-apps-gateway) — the gateway this repo deploys.
+- [Claude Code documentation](https://code.claude.com/docs) — CLI setup, settings, and managed settings.
+- [Permission modes](https://code.claude.com/docs/en/permission-modes) — including auto mode and how tool approvals work.
+- [Claude on Amazon Bedrock](https://docs.anthropic.com/en/api/claude-on-amazon-bedrock) — using Claude models through Bedrock.
+
+**AWS building blocks used here**
+- [Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html) and [managing model access](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)
+- [AWS Client VPN](https://docs.aws.amazon.com/vpn/latest/clientvpn-admin/what-is.html) and [mutual (certificate) authentication](https://docs.aws.amazon.com/vpn/latest/clientvpn-admin/authentication-authorization.html)
+- [Amazon ECS on AWS Fargate](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html)
+- [Application Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html) (internal scheme)
+- [AWS Certificate Manager](https://docs.aws.amazon.com/acm/latest/userguide/acm-overview.html)
+- [Route 53 private hosted zones](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/hosted-zones-private.html)
+- [AWS Secrets Manager](https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html)
+- [Amazon RDS for PostgreSQL](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html)
+- [AWS Distro for OpenTelemetry (ADOT)](https://aws-otel.github.io/) and [CloudWatch Embedded Metric Format](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format.html)
+- [AWS CloudFormation](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/Welcome.html)
+
+**Standards**
+- [OpenID Connect](https://openid.net/developers/how-connect-works/) — the OIDC flow the gateway uses for sign-in.
+
+*This walkthrough documents a proof-of-concept deployment. Validate the security, availability, and cost tradeoffs against your own requirements before running it in production.*
