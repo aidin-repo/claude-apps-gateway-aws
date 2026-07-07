@@ -1,21 +1,32 @@
-# Claude apps gateway on AWS
+# Giving your team Claude Code on Bedrock, without spraying AWS keys across laptops
 
-A worked, end-to-end deployment of Anthropic's [Claude apps gateway](https://code.claude.com/docs/en/claude-apps-gateway) on **ECS Fargate**, sitting in front of **Amazon Bedrock**, behind an **internal ALB**, with OIDC sign-in and per-user spend caps. Developer laptops reach it over **AWS Client VPN**, so no AWS credentials ever leave your account.
+Say you want your developers using [Claude Code](https://code.claude.com), but backed by **Amazon Bedrock** in your own account instead of a consumer plan. You want SSO sign-in, per-user spend limits, and control over which models people can call. And you'd very much prefer that no long-lived AWS credentials ever land on a laptop.
 
-> **Why the shape.** Claude Code's CLI will only connect to a gateway whose hostname resolves to a **private IP** (RFC 1918, CGNAT, IPv6 ULA, or loopback). It's a deliberate security guard: a trusted gateway can push managed settings that run shell commands on the client, so there's no flag to loosen it. That's why the ALB is internal and laptops connect over VPN.
+This repo is a working, end-to-end answer to that. It deploys Anthropic's [Claude apps gateway](https://code.claude.com/docs/en/claude-apps-gateway) on **ECS Fargate**, in front of Bedrock, behind an **internal load balancer**, with OIDC login and spend caps. Developers reach it over **AWS Client VPN**. The AWS credential lives in one place (the gateway), and each laptop holds nothing but a short-lived SSO token.
 
-> **Proof of concept.** Sound defaults (private ALB, SSO with short-lived tokens, server-side model enforcement, Secrets Manager, encryption in transit and at rest, mutual-cert VPN). Before production: multi-AZ, cert/secret rotation, IAM least-privilege review, alerting, backups, and your change-management process.
+Below is the whole story: the one constraint that shapes the design, how a request actually flows, what each piece is for, and how to stand it up, run it, and tear it down.
 
-**What you get:**
-- ECS Fargate task running the `claude gateway` binary + an ADOT collector sidecar
-- Internal ALB (HTTPS 443, wildcard cert), Route 53 alias to a private IP
-- RDS Postgres 16 for gateway state
-- Secrets Manager for JWT / DB / OIDC / admin write key
-- S3-hosted `gateway.yaml` (versioned, TLS-only) — change config with no image rebuild
-- CloudWatch dashboard for cost, tokens, per-user activity, Bedrock health
-- Client VPN endpoint with mutual TLS, for laptop access
+> **A quick honesty note.** This is a proof of concept with sound defaults (private ALB, short-lived SSO tokens, server-side model enforcement, Secrets Manager, encryption in transit and at rest, mutual-cert VPN). Before production you'll still want multi-AZ, cert and secret rotation, an IAM least-privilege pass, alerting, backups, and your usual change management.
 
-## Architecture
+## The one constraint that shapes everything
+
+Here's the design decision that everything else follows from: **Claude Code's CLI will only talk to a gateway whose hostname resolves to a private IP** (RFC 1918 like `10.x`/`172.16.x`/`192.168.x`, carrier-grade NAT, IPv6 ULA, or loopback).
+
+That's not an oversight you can flag your way around. A trusted gateway can push *managed settings* that run shell commands on the client, so Anthropic deliberately refuses to treat a public endpoint as trusted. There's no override.
+
+Once you accept that, the rest of the shape is forced: the load balancer has to be **internal**, and laptops need a **private network path** to reach it. That path is the Client VPN. If the design looks heavier than "just put it behind HTTPS," this is why.
+
+## What's in the box, and what each piece is for
+
+- **ECS Fargate task** runs the `claude gateway` binary, the proxy that authenticates users and forwards their requests to Bedrock. Riding alongside it is an **ADOT collector** sidecar (AWS Distro for OpenTelemetry), which ships usage metrics to CloudWatch.
+- **Internal ALB** is an HTTPS-only load balancer (443, wildcard cert) reachable *only* from inside your VPC. A Route 53 alias points the gateway hostname at its private IP.
+- **RDS Postgres 16** keeps gateway state: sessions and spend counters.
+- **Secrets Manager** holds the JWT signing key, database password, OIDC client secret, and admin API key. They're injected into the task at runtime, so nothing sensitive is baked into the container image.
+- **S3-hosted `gateway.yaml`** is the live config (versioned, TLS-only). Change your models, access rules, or spend caps by editing and re-uploading. No image rebuild.
+- **CloudWatch dashboard** shows per-user cost, token usage, activity, and Bedrock API health, fed by OTLP (OpenTelemetry) and EMF (Embedded Metric Format) data from the collector.
+- **Client VPN endpoint** is a mutual-TLS VPN that gives laptops their private path to the internal ALB.
+
+## How it fits together
 
 ```mermaid
 graph TD
@@ -55,21 +66,25 @@ graph TD
     BR -->|sign in| OIDC
 ```
 
-> **Cost.** Idle spend is ~**$115/month**: ~$72 Client VPN endpoint (per-hour, independent of traffic), ~$18 internal ALB, ~$15 RDS db.t4g.micro, plus small Fargate + CloudWatch charges. Tear down between demos to keep spend near $0. Production would also want NAT + Multi-AZ RDS on top.
+Following a single request makes the diagram concrete. A developer connects the VPN, runs `claude`, and signs in. The CLI opens their browser to your identity provider for SSO; the gateway validates that OIDC login and mints a short-lived bearer token. From then on every `claude` request travels laptop → VPN → internal ALB → gateway. The gateway checks the token, applies your model and spend-cap policy, and only then calls Bedrock using the *gateway's* IAM role. The credential never leaves the gateway; the laptop only ever holds a temporary token.
 
-## Prerequisites
+> **What it costs.** Sitting idle, this runs about **$115/month**: roughly $72 for the Client VPN endpoint (billed per hour, regardless of traffic), $18 for the internal ALB, $15 for RDS `db.t4g.micro`, plus small Fargate and CloudWatch charges. Tear it down between demos to keep spend near zero. Production would add NAT and Multi-AZ RDS on top. There's a full breakdown near the end.
 
-- An existing **VPC** with **two subnets in different AZs** (used by the ALB, tasks, and RDS subnet group). This template does not create a VPC.
-- **Route 53 private hosted zone** for the gateway hostname (`deploy.sh preflight` refuses public zones — see the escape hatch below if you can't avoid one).
-- **ACM cert** covering the gateway hostname — see [Domain & cert](#domain--cert) for the three paths.
+## Before you start
+
+You'll need a few things already in place. This template deliberately doesn't create your network or your DNS, it plugs into them.
+
+- An existing **VPC** with **two subnets in different AZs** (the ALB, tasks, and RDS subnet group use them).
+- A **Route 53 private hosted zone** for the gateway hostname. `deploy.sh preflight` refuses public zones by default, because a public zone would leak your internal ALB's private IP to the world's DNS. There's an escape hatch if you truly can't avoid one.
+- An **ACM certificate** covering the gateway hostname. The next section walks through the three ways to get one.
 - **Amazon Bedrock model access** enabled for the Claude models in your region (a one-time console opt-in per model).
-- **OIDC IdP** (Okta, Entra, Auth0, Google Workspace, Keycloak, etc.) — a confidential web app with a client secret. The issuer must serve `/.well-known/openid-configuration`.
-- **Claude Code v2.1.195+** on the gateway image and every developer laptop.
-- Local tooling: **aws CLI**, **curl**, **envsubst** (`brew install gettext` / `apt install gettext-base`), and **OpenSSL >= 1.1.1** (macOS's `/usr/bin/openssl` is LibreSSL and is rejected — `brew install openssl` and prepend to PATH).
+- An **OIDC identity provider** (Okta, Entra, Auth0, Google Workspace, Keycloak, and so on): a confidential web app with a client secret, whose issuer serves `/.well-known/openid-configuration`.
+- **Claude Code v2.1.195+** on both the gateway image and every developer laptop.
+- Local tools: **aws CLI**, **curl**, **envsubst** (`brew install gettext` / `apt install gettext-base`), and **OpenSSL >= 1.1.1**. Note that macOS ships LibreSSL at `/usr/bin/openssl`, which AWS rejects for cert import, so `brew install openssl` and put it ahead on your PATH.
 
-## Domain & cert
+## Sorting out a domain and cert
 
-`deploy.sh` doesn't create the domain, zone, or cert — you supply the ARN and zone id. You need one of these three arrangements:
+`deploy.sh` won't create your domain, zone, or cert; you hand it an ARN and a zone id. Three arrangements work, in ascending order of pain:
 
 | Path | Public domain? | Cost | Setup effort |
 |---|---|---|---|
@@ -77,40 +92,42 @@ graph TD
 | **B. ACM Private CA** | No | ~$400/mo per CA | Medium |
 | **C. Self-signed cert imported to ACM** | No | $0 | High (distribute root CA via MDM) |
 
-**Recommended: Path A.** The pattern:
+**Path A is the one to reach for.** The trick is that a public cert doesn't force a public endpoint:
 
-1. Own or delegate any real domain (any registrar, any TLD — a $10/yr one works).
-2. `aws acm request-certificate --domain-name '*.internal.mycompany.com' --validation-method DNS` and complete the DNS validation via your public zone.
-3. Create a **private** Route 53 hosted zone for `internal.mycompany.com` and associate it with your VPC. This is where the gateway A-record lives, so no public DNS ever exposes the internal ALB's private IP.
-4. Fill in `deploy.env` with the cert ARN + private zone id + `HOSTNAME_FQDN=claude-gateway.internal.mycompany.com`.
+1. Own or delegate any real domain (any registrar, any TLD; a $10/yr one is fine).
+2. Request the cert: `aws acm request-certificate --domain-name '*.internal.mycompany.com' --validation-method DNS`, and complete DNS validation in your public zone.
+3. Create a **private** Route 53 hosted zone for `internal.mycompany.com` and associate it with your VPC. The gateway's A-record lives here, so public DNS never sees the internal ALB's private IP.
+4. Put the cert ARN, the private zone id, and `HOSTNAME_FQDN=claude-gateway.internal.mycompany.com` into `deploy.env`.
 
-Path B skips public DNS entirely but requires a $400/mo Private CA. Path C is only realistic if your org already ships a corporate root CA via MDM.
+Path B skips public DNS entirely but costs $400/mo for the Private CA. Path C only makes sense if your org already pushes a corporate root CA through MDM.
 
-## Deploy
+## Deploying it
+
+Two commands get you there:
 
 ```bash
 bash deploy.sh init                  # interactive: discovers AWS-side inputs, prompts for the rest
 bash deploy.sh                       # runs: preflight -> app -> [vpn] -> verify
 ```
 
-`init` writes `deploy.env` for you (mode 0600, git-ignored). It lists your VPCs / subnets / ACM certs / R53 zones / ECR images and lets you pick from a numbered list; only the human-decision fields (NAME_PREFIX, HOSTNAME_FQDN, OIDC creds, EMAIL_DOMAIN, ADMIN_GROUP) require typing. Prefer to write `deploy.env` by hand? `cp deploy.env.example deploy.env` and edit.
+`init` writes `deploy.env` for you (mode 0600, git-ignored). It lists your VPCs, subnets, ACM certs, Route 53 zones, and ECR images and lets you pick from numbered menus; you only type the human-decision fields (`NAME_PREFIX`, `HOSTNAME_FQDN`, the OIDC creds, `EMAIL_DOMAIN`, `ADMIN_GROUP`). Prefer to write the file by hand? `cp deploy.env.example deploy.env` and edit.
 
-`deploy.sh` reads config **only from `deploy.env`** — no personal defaults, no environment guessing. Every subcommand is idempotent:
+From there, `deploy.sh` reads config **only from `deploy.env`**. No personal defaults, no guessing at your environment. Each subcommand is idempotent, so you can rerun any of them safely:
 
 | Subcommand | What it does |
 |---|---|
-| `bash deploy.sh init` | Interactive discovery + prompts, writes `deploy.env` |
-| `bash deploy.sh preflight` | Read-only: creds, VPC, subnet AZ diversity, ACM cert region + SAN, private R53 zone, OIDC discovery URL, Bedrock reachability, ECR image, no stale Secrets Manager tombstones |
-| `bash deploy.sh app` | Deploy the gateway stack, render `gateway.yaml.template` via envsubst, upload to S3, roll ECS. **Hard-fails** on rollout failure or non-COMPLETED state. |
-| `bash deploy.sh vpn` | Delegate to `vpn-setup.sh` (Client VPN endpoint + `client.ovpn` profile) if `DEPLOY_VPN=yes` |
-| `bash deploy.sh verify` | Check rollout state, probe `/healthz`, tail logs for OIDC discovery success |
+| `bash deploy.sh init` | Interactive discovery and prompts, writes `deploy.env` |
+| `bash deploy.sh preflight` | Read-only checks: creds, VPC, subnet AZ diversity, ACM cert region and SAN, private R53 zone, OIDC discovery URL, Bedrock reachability, ECR image, and no stale Secrets Manager tombstones |
+| `bash deploy.sh app` | Deploys the gateway stack, renders `gateway.yaml.template` via envsubst, uploads to S3, rolls ECS. **Hard-fails** on a bad rollout. |
+| `bash deploy.sh vpn` | Delegates to `vpn-setup.sh` (Client VPN endpoint plus a `client.ovpn` profile) when `DEPLOY_VPN=yes` |
+| `bash deploy.sh verify` | Checks rollout state, probes `/healthz`, tails logs for OIDC discovery success |
 | `bash deploy.sh` (no arg) | preflight + app + [vpn] + verify |
 
-OIDC creds are `NoEcho` CFN parameters, populated into `<NAME_PREFIX>/oidc` on first CREATE — no `put-secret-value` step, no `REPLACE_ME` placeholder. Register the OIDC app in your IdP first (redirect URI `https://<gateway-host>/oauth/callback`) and paste the `client_id` + `client_secret` into `deploy.env`.
+The OIDC credentials go in as `NoEcho` CloudFormation parameters and land in the `<NAME_PREFIX>/oidc` secret on the first CREATE. There's no separate `put-secret-value` step and no `REPLACE_ME` placeholder to remember. Just register the OIDC app in your IdP first (redirect URI `https://<gateway-host>/oauth/callback`) and paste the `client_id` and `client_secret` into `deploy.env`.
 
-### Multiple stacks side-by-side
+### Running more than one stack
 
-Every user-visible resource name is threaded through `NAME_PREFIX`. For a parallel test stack in the same account, change three lines in `deploy.env`:
+Every user-visible resource name is threaded through `NAME_PREFIX`, so a parallel test stack in the same account is three lines in `deploy.env`:
 
 ```env
 NAME_PREFIX=claude-gateway-test
@@ -118,21 +135,21 @@ GW_STACK=claude-apps-gateway-test
 HOSTNAME_FQDN=claude-gateway-test.internal.example.com
 ```
 
-`NAME_PREFIX` rules: 1-19 chars, lowercase alphanumeric + hyphens, no leading/trailing hyphen (keeps ALB / TG / DB name-length limits satisfied when suffixes append).
+Keep `NAME_PREFIX` to 1-19 lowercase alphanumeric characters and hyphens, no leading or trailing hyphen. That keeps the ALB, target group, and DB names within length limits once suffixes are appended.
 
-### Escape hatches
+### When you need to bend a rule
 
-Preflight is strict. If a check fails on a POC and you know what you're doing:
+Preflight is strict on purpose. If a check fails on a POC and you know what you're doing:
 
-- `PREFLIGHT_ALLOW_PUBLIC_ZONE=yes bash deploy.sh …` bypasses the private-Route-53 requirement (accepts the "internal-IP-in-public-DNS" finding).
+- `PREFLIGHT_ALLOW_PUBLIC_ZONE=yes bash deploy.sh …` waives the private-Route-53 requirement and accepts the "internal IP in public DNS" finding.
 
-Don't put bypasses in `deploy.env` — keep them per-invocation.
+Keep bypasses per-invocation; don't bake them into `deploy.env`.
 
-## Laptop side
+## Setting up a laptop
 
-Two things per laptop.
+Two things per machine.
 
-**1. Managed settings.** `forceLoginMethod` / `forceLoginGatewayUrl` are honored only from the managed tier (not `~/.claude/settings.json`). Write this JSON to the OS-specific path:
+**First, managed settings.** `forceLoginMethod` and `forceLoginGatewayUrl` are honored only from the managed tier, not `~/.claude/settings.json`. Drop this JSON at the OS-specific path:
 
 | OS | Path |
 |---|---|
@@ -144,11 +161,11 @@ Two things per laptop.
 {"forceLoginMethod":"gateway","forceLoginGatewayUrl":"https://<your-gateway-host>"}
 ```
 
-Writing this file requires elevated permissions on every OS. In a managed fleet, ship it via MDM (Jamf, Intune) rather than expecting each developer to install by hand.
+Writing that file needs elevated permissions everywhere, so in a real fleet you'd ship it through MDM (Jamf, Intune) rather than asking each developer to place it by hand.
 
-**2. Client VPN.** `bash vpn-setup.sh` mints the CA, server cert (imports to ACM), and client cert, then builds a `client.ovpn` with the private key inlined (mode 0600). Import into the **AWS VPN Client** and connect. Back up `ca.key` + `client.key` to a password manager — onboarding new users is a client-cert mint that never touches the endpoint. Losing the CA forces a full regen (endpoint replacement, minutes of downtime).
+**Second, the VPN.** `bash vpn-setup.sh` mints the CA, the server cert (importing it to ACM), and a client cert, then assembles a `client.ovpn` with the private key inlined (mode 0600). Import that into the **AWS VPN Client** and connect. Back up `ca.key` and `client.key` to a password manager, because onboarding the next teammate is then just a client-cert mint that never touches the endpoint. Lose the CA and you're into a full regen, which replaces the endpoint and costs a few minutes of downtime.
 
-Then: `claude` → `/login` → complete SSO. A healthy sign-in produces these events in `/ecs/<NAME_PREFIX>`:
+With the VPN up, it's `claude` → `/login` → finish SSO in the browser. A healthy sign-in leaves this trail in `/ecs/<NAME_PREFIX>`:
 
 ```json
 {"evt":"device.verify","result":"redirect"}
@@ -156,11 +173,9 @@ Then: `claude` → `/login` → complete SSO. A healthy sign-in produces these e
 {"evt":"inference","path":"/v1/messages","model":"claude-opus-4-7","upstream":"bedrock","status":200,"ms":3681}
 ```
 
-## Day-2 ops
+## Living with it: day-2 operations
 
-**Change config (models, RBAC, spend caps, telemetry).** Edit `gateway.yaml.template`, then `bash deploy.sh app`. Takes ~2 min end-to-end. Model access and per-group policies are enforced server-side — a client can't request a model you haven't allowed.
-
-Example: gate `WebFetch`/`WebSearch` and restrict contractors to Haiku:
+**Changing config** (models, access rules, spend caps, telemetry) is a two-minute loop: edit `gateway.yaml.template`, then `bash deploy.sh app`. Because model access and per-group policy are enforced *server-side*, a client can't sneak in a model you haven't allowed. Here's a policy that keeps contractors on Haiku and blocks web tools for them:
 
 ```yaml
 managed:
@@ -175,7 +190,7 @@ managed:
         availableModels: [claude-opus-4-8, claude-sonnet-5, claude-haiku-4-5]
 ```
 
-**Spend caps.** Runtime state, no redeploy needed. `manage-spend-limits.sh` auto-fetches `ADMIN_KEY` from Secrets Manager when `deploy.env` is sourced:
+**Spend caps** are runtime state, so no redeploy is involved. `manage-spend-limits.sh` pulls the admin key from Secrets Manager automatically once `deploy.env` is sourced:
 
 ```bash
 bash manage-spend-limits.sh set-org 500                # $500/month org-wide
@@ -185,11 +200,11 @@ bash manage-spend-limits.sh list                       # or `effective` to see p
 bash manage-spend-limits.sh delete spl_xxxx            # requires typed DELETE
 ```
 
-Find a user's `oidc_sub` in the `user_id` field of `effective`.
+A user's `oidc_sub` shows up in the `user_id` field of `effective`.
 
-**Teardown.** `bash teardown.sh` — typed `DELETE` confirmation (or `CONFIRM=DELETE bash teardown.sh` for CI). Order: VPN stack → force-delete secrets (kills the 30-day tombstone that would block a re-deploy) → empty the versioned config bucket in batches → delete the gateway stack. RDS leaves a final snapshot (`<prefix>-db-final-*`) because `DeletionPolicy: Snapshot` — delete manually to reclaim storage.
+**Tearing it down** is `bash teardown.sh`, which asks you to type `DELETE` (or set `CONFIRM=DELETE` for CI). It works in a deliberate order: delete the VPN stack, force-delete the secrets so the 30-day recovery tombstone can't block your next deploy, empty the versioned config bucket in batches, then delete the gateway stack. RDS leaves a final snapshot behind (`<prefix>-db-final-*`) because its `DeletionPolicy` is `Snapshot`, so delete that by hand when you want the storage back.
 
-## Cost breakdown
+## The full cost picture
 
 | Item | Hourly | ~Monthly (idle) |
 |---|---|---|
@@ -201,11 +216,11 @@ Find a user's `oidc_sub` in the `user_id` field of `effective`.
 | **Total idle** | | **~$120** |
 | Bedrock inference | usage-based | on top |
 
-VPN endpoint dominates. Disconnect the VPN client when idle if you want to skip the ~$0.05/hr per-connection charge on top.
+The VPN endpoint dominates. Disconnecting the VPN client when you're not using it also skips the extra ~$0.05/hr per-connection charge.
 
-## Troubleshooting
+## When things go wrong
 
-**"Couldn't load settings from Cloud gateway" — but the gateway is reachable.** This looks like a network error but is auth. With VPN up, `dig +short <gateway-host>` returns private IPs and `curl -sk https://<gateway-host>/healthz` prints `ok`; yet `claude` still fails. Check the gateway audit log — you'll see `auth.denied` with `reason: invalid_token`. The CLI is presenting a stale credential (prior gateway session or a personal API login in the macOS Keychain). Clear it:
+**"Couldn't load settings from Cloud gateway" — but the gateway is clearly reachable.** This reads like a network problem and is actually auth. With the VPN up, `dig +short <gateway-host>` returns private IPs and `curl -sk https://<gateway-host>/healthz` prints `ok`, yet `claude` still fails. Check the gateway audit log and you'll find `auth.denied` with `reason: invalid_token`: the CLI is presenting a stale credential (an old gateway session, or a personal API login sitting in the macOS Keychain). Clear it and sign in fresh:
 
 ```bash
 claude auth logout
@@ -213,42 +228,42 @@ security delete-generic-password -s "Claude Code-credentials" 2>/dev/null || tru
 claude          # then /login inside the TUI
 ```
 
-**ECS rollout stuck / task not healthy.** `aws logs tail /ecs/<NAME_PREFIX> --since 10m`. Common causes: OIDC discovery URL unreachable from the VPC (add a NAT / VPC endpoint or check the security group egress), config template referenced an env var you didn't add to the envsubst allowlist in `deploy.sh` (post-render check should have caught this — check the deploy output), or the image entry pointed at an ECR tag that no longer exists.
+**ECS rollout stuck, or the task never goes healthy.** Start with `aws logs tail /ecs/<NAME_PREFIX> --since 10m`. The usual suspects: the OIDC discovery URL isn't reachable from the VPC (add a NAT or VPC endpoint, or check security-group egress); the config template referenced a variable you never added to the envsubst allowlist in `deploy.sh` (the post-render check should have caught it, so read the deploy output); or the image URI points at an ECR tag that no longer exists.
 
-**Next deploy fails "already scheduled for deletion".** A prior teardown left one of the four `<NAME_PREFIX>/*` secrets in the 30-day recovery window. `deploy.sh preflight` catches this and tells you which secret; `aws secretsmanager restore-secret --secret-id <name>` fixes it.
+**Your next deploy fails with "already scheduled for deletion".** A previous teardown left one of the four `<NAME_PREFIX>/*` secrets inside its 30-day recovery window. `deploy.sh preflight` names the offending secret, and `aws secretsmanager restore-secret --secret-id <name>` clears it.
 
-**Stack CREATE completes but /login is broken.** `/healthz` doesn't depend on OIDC (discovery is lazy). Watch the log tail for OIDC discovery events, and confirm the redirect URI in your IdP exactly matches `https://<HOSTNAME_FQDN>/oauth/callback`.
+**The stack finishes CREATE but `/login` is broken.** `/healthz` doesn't depend on OIDC (discovery is lazy), so a green stack doesn't prove sign-in works. Watch the log tail for OIDC discovery events and confirm the redirect URI registered in your IdP matches `https://<HOSTNAME_FQDN>/oauth/callback` exactly.
 
-## Why this shape
+## Why build it this way?
 
-The common alternative is client-side STS federation: each laptop federates to STS and holds 12-hour AWS credentials. The gateway inverts that — the AWS credential lives only in the gateway, and clients hold only an SSO bearer token.
+The common alternative is client-side STS federation: each laptop federates to STS and carries 12-hour AWS credentials. The gateway inverts that. The AWS credential lives only in the gateway, and clients hold only an SSO bearer token.
 
 |  | Client-side STS federation | Claude apps gateway |
 |---|---|---|
 | AWS creds location | On each laptop (12h STS) | Only in the gateway |
-| Model access enforcement | Client managed settings | Server-side (400 on denied model) |
+| Model access enforcement | Client managed settings | Server-side (400 on a denied model) |
 | Spend caps | Custom (DynamoDB + Lambda + API GW) | Built-in per-user/group/org caps |
 | Infra footprint | ~8 CloudFormation stacks | 1 container + Postgres |
 | Maintained by | You | Anthropic (tested per release) |
 
-## Limitations
+## What it doesn't do
 
-- CLI requires a private-IP gateway — no public option.
-- No server-side web search; 5-minute prompt cache only (no 1-hour TTL); no first-party-only optimizations.
-- OIDC only, one issuer per gateway. No SAML or LDAP. No CI/service-token flow (browser device flow only).
+- The CLI needs a private-IP gateway. There's no public option.
+- No server-side web search; the prompt cache is 5-minute only (no 1-hour TTL); no first-party-only optimizations.
+- OIDC only, one issuer per gateway. No SAML, no LDAP. Browser device flow only, so no CI or service-token path.
 - Linux server only.
 
-## Repository layout
+## What's in the repo
 
 - `deploy.env.example` — copy to `deploy.env` and fill in.
-- `deploy.sh` — orchestrator (`init | preflight | app | vpn | verify`).
-- `phase2-fargate.yaml` — gateway CloudFormation stack.
-- `client-vpn.yaml` — Client VPN stack (parallel-stack-safe via `NamePrefix` + `GatewayStackName`).
-- `gateway.yaml.template` — gateway config; deploy-time values rendered by `envsubst`, runtime placeholders resolved by the gateway binary.
-- `Dockerfile` + `entrypoint.sh` — non-root container, fetches config from S3, fails hard if the fetch fails.
-- `buildspec-image.yml` — CodeBuild build for environments without local Docker.
-- `vpn-setup.sh` — OpenSSL PKI + ACM import + `client.ovpn` builder.
-- `manage-spend-limits.sh` — admin API wrapper for spend caps.
-- `teardown.sh` — reversal, secrets-before-stack ordering, bounded waiter.
-- `lib/init.sh` — interactive AWS discovery + prompts, generates `deploy.env`.
-- `lib/preflight.sh` — read-only preflight checks (also runnable standalone).
+- `deploy.sh` — the orchestrator (`init | preflight | app | vpn | verify`).
+- `phase2-fargate.yaml` — the gateway CloudFormation stack.
+- `client-vpn.yaml` — the Client VPN stack (parallel-stack-safe via `NamePrefix` + `GatewayStackName`).
+- `gateway.yaml.template` — the gateway config; deploy-time values are rendered by `envsubst`, runtime placeholders are resolved by the gateway binary.
+- `Dockerfile` + `entrypoint.sh` — a non-root container that fetches config from S3 and fails hard if the fetch fails.
+- `buildspec-image.yml` — a CodeBuild build for environments without local Docker.
+- `vpn-setup.sh` — the OpenSSL PKI, ACM import, and `client.ovpn` builder.
+- `manage-spend-limits.sh` — the admin-API wrapper for spend caps.
+- `teardown.sh` — reversal, with secrets-before-stack ordering and a bounded waiter.
+- `lib/init.sh` — interactive AWS discovery and prompts, generates `deploy.env`.
+- `lib/preflight.sh` — the read-only preflight checks (also runnable on its own).
