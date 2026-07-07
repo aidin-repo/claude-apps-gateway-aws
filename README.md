@@ -1,4 +1,4 @@
-# Giving your team Claude Code on Bedrock, without spraying AWS keys across laptops
+# Deploy the Claude apps gateway on AWS: Claude Code on Amazon Bedrock with SSO, VPN, and spend caps
 
 Say you want your developers using [Claude Code](https://code.claude.com), but backed by **Amazon Bedrock** in your own account instead of a consumer plan. You want SSO sign-in, per-user spend limits, and control over which models people can call. And you'd very much prefer that no long-lived AWS credentials ever land on a laptop.
 
