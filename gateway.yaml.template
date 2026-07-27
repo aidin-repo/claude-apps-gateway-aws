@@ -62,10 +62,46 @@ models:
     label: Claude Sonnet 5
     upstream_model:
       bedrock: us.anthropic.claude-sonnet-5
+  - id: claude-fable-5
+    label: Claude Fable 5
+    upstream_model:
+      bedrock: us.anthropic.claude-fable-5
 
-# Per-group access control (RBAC). Uncomment and set groups to your IdP group names. The `groups`
-# OIDC scope above is requested specifically so these match. availableModels is enforced
-# server-side (a denied model returns 400) as well as filtering the client's model picker.
+# Per-group access control (RBAC). The `groups` OIDC scope above is requested specifically so
+# these match. availableModels is enforced server-side (a denied model returns 400) AND is what
+# populates the client's /model picker -- a model only defined in the top-level `models:` block
+# above is routable but will NOT show up in /model until it's also listed here.
+managed:
+  policies:
+    - match: {}                     # catch-all: everyone, since no group-specific rules are set
+      cli:
+        availableModels: [claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-haiku-4-5]
+        # A top-level `permissionMode` key was tried and REJECTED at boot ("unknown settings key").
+        # Per the gateway config reference, `cli` is a full managed-settings.json document, so the
+        # correct key is nested under `permissions.defaultMode` (same as local settings.json).
+        permissions:
+          defaultMode: auto
+        # Auto mode is feature-gated behind this env var -- without it the CLI shows
+        # "auto mode requires CLAUDE_CODE_ENABLE_AUTO_MODE=1" and defaultMode above has no effect.
+        # Not on the CLI's env safe-list, so this triggers the one-time security approval dialog
+        # on each interactive client's next startup (same as the pushed OTEL endpoint below).
+        env:
+          CLAUDE_CODE_ENABLE_AUTO_MODE: "1"
+        # Bedrock Guardrail (phi-test-guardrail, dc1kiqobdvbt) was tested here and rolled back.
+        # ANTHROPIC_CUSTOM_HEADERS (X-Amzn-Bedrock-GuardrailIdentifier/-GuardrailVersion) is a
+        # client-side header for setups where the CLI itself calls Bedrock directly. In this
+        # gateway deployment, the GATEWAY calls Bedrock with its own upstream credential, so a
+        # header the CLI sends to the gateway never reaches Bedrock. Confirmed live from the
+        # claude terminal with both the DRAFT guardrail version and published version 12: both
+        # produced the identical "403 upstream denied the request" error (traced to an IAM
+        # bedrock:GuardrailIdentifier deny condition that was also tested and rolled back --
+        # see phase2-fargate.yaml TaskRole), proving the version number was never the variable.
+        # Guardrail enforcement for this gateway requires either the gateway vendor adding a
+        # native guardrail field to upstreams.bedrock/models/managed.cli, or a different
+        # enforcement layer (e.g. a Bedrock resource policy) that doesn't depend on the gateway.
+
+# Example group-scoped policy (uncomment and set groups to your IdP group names to restrict a
+# subset of users to fewer models / denied tools):
 # managed:
 #   policies:
 #     - match: { groups: [eng-contractors] }
@@ -73,13 +109,14 @@ models:
 #         availableModels: [claude-haiku-4-5]
 #         enforceAvailableModels: true
 #         permissions: { deny: ["WebFetch", "WebSearch"] }
-#     - match: {}                     # catch-all: everyone else
+#     - match: {}
 #       cli:
-#         availableModels: [claude-opus-4-8, claude-sonnet-5, claude-haiku-4-5]
+#         availableModels: [claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-haiku-4-5]
 
 # Telemetry: relay each signed-in client's OTLP metrics to the ADOT collector sidecar in the same
-# Fargate task, which dual-exports to CloudWatch: OTLP-native (PromQL-queryable, backs the
-# deployed dashboard) plus the ClaudeCode EMF namespace. Enabling this (together with
+# Fargate task, which exports to CloudWatch OTLP-native (PromQL-queryable). These metrics feed the
+# built-in CloudWatch Coding Agent Insights dashboards (GenAI Observability > Coding Agent Insights
+# > Claude Code) -- the primary monitoring surface for this stack. Enabling this (together with
 # listen.public_url above) makes the gateway push OTEL_* env to every client, so laptops send
 # metrics to the gateway automatically with no developer-side setup. The pushed OTEL endpoint is a
 # non-safe-list var, so each interactive client sees a one-time approval dialog on next startup.

@@ -10,7 +10,7 @@ Parameters:
     Type: String
     Description: >
       Prefix threaded through every user-visible resource name (secrets, bucket, ALB, TG, RDS,
-      cluster, service, task family, log groups, dashboard). Lets you run parallel stacks in the
+      cluster, service, task family, log groups). Lets you run parallel stacks in the
       same account+region (e.g. `claude-gateway` for prod, `claude-gateway-test` for a test copy).
       Must be 1-19 characters, lowercase alphanumeric + hyphens, no leading/trailing hyphen —
       keeps ALB (max 32) and other name-length limits satisfied when suffixes are appended.
@@ -285,14 +285,6 @@ Resources:
       LogGroupName: !Sub '/ecs/${NamePrefix}'
       RetentionInDays: 14
 
-  # EMF metrics land here: the ADOT collector's awsemf exporter writes embedded-metric-format
-  # log events, from which CloudWatch extracts metrics under the ClaudeCode namespace.
-  MetricsLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub '/aws/claude-code/${NamePrefix}-metrics'
-      RetentionInDays: 30
-
   Cluster:
     Type: AWS::ECS::Cluster
     Properties:
@@ -345,6 +337,14 @@ Resources:
                 Resource:
                   - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.anthropic.*
                   - arn:aws:bedrock:*::foundation-model/anthropic.*
+              # A bedrock:GuardrailIdentifier explicit-Deny condition was tested here (live,
+              # confirmed via real claude CLI requests: "403 upstream denied the request") with
+              # both DRAFT and published version 12 of guardrail dc1kiqobdvbt. Both produced the
+              # identical IAM error, confirming the guardrail version was never the variable --
+              # the gateway has no config surface (upstreams.bedrock/models/managed.cli) to attach
+              # a guardrail to its own Bedrock calls, so this condition can never be satisfied.
+              # Rolled back. Guardrail enforcement for this gateway needs either native support
+              # added upstream, or a different enforcement layer entirely.
         - PolicyName: read-config
           PolicyDocument:
             Version: '2012-10-17'
@@ -352,15 +352,16 @@ Resources:
               - Effect: Allow
                 Action: s3:GetObject
                 Resource: !Sub '${ConfigBucket.Arn}/gateway.yaml'
-        # The ADOT collector sidecar uses the task role to publish metrics to CloudWatch, both to
-        # the OTLP-native endpoint (otlphttp + SigV4 -> monitoring.<region>.amazonaws.com, which is
-        # authorized by cloudwatch:PutMetricData) and as EMF to the ClaudeCode namespace.
-        # PutMetricData is unconditional because OTLP-ingested metrics do not carry the custom
-        # namespace that a cloudwatch:namespace condition would match.
-        # PutMetricData is scoped by namespace so a compromised task role cannot pollute other
-        # namespaces (AWS/*, application metrics from unrelated services). OTLP-ingested metrics
-        # carry the ClaudeCode namespace via the EMF exporter's `namespace: ClaudeCode` in
-        # AOT_CONFIG_CONTENT — keep this condition and that setting in lock-step.
+        # The ADOT collector sidecar uses the task role (SigV4) to publish metrics to the
+        # CloudWatch OTLP-native endpoint (monitoring.<region>.amazonaws.com/v1/metrics). This is
+        # the PromQL-queryable store that Coding Agent Insights reads from. OTLP ingestion
+        # authorizes as cloudwatch:PutMetricData on resource dataset/default and carries NO custom
+        # namespace, so PutMetricData MUST NOT be scoped by a cloudwatch:namespace condition --
+        # doing so denies the request (403) and silently drops every OTLP metric. (A prior
+        # namespace-scoped condition did exactly that.)
+        # Trade-off of the unconditioned PutMetricData: the task role can publish to any metric
+        # namespace. That blast radius is inherent to CloudWatch OTLP ingestion (it can't be
+        # namespace-scoped) and is the AWS-recommended in-AWS path (SigV4, no long-lived token).
         - PolicyName: cloudwatch-telemetry
           PolicyDocument:
             Version: '2012-10-17'
@@ -368,18 +369,6 @@ Resources:
               - Effect: Allow
                 Action: cloudwatch:PutMetricData
                 Resource: '*'
-                Condition:
-                  StringEquals:
-                    cloudwatch:namespace: ClaudeCode
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                  - logs:DescribeLogStreams
-                  - logs:DescribeLogGroups
-                Resource:
-                  - !GetAtt MetricsLogGroup.Arn
-                  - !Sub '${MetricsLogGroup.Arn}:*'
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -434,11 +423,11 @@ Resources:
               awslogs-stream-prefix: gateway
 
         # ADOT collector sidecar. Receives OTLP/HTTP on localhost:4318 (the gateway relays each
-        # signed-in client's telemetry here via telemetry.forward_to in gateway.yaml) and dual-exports:
-        #   - otlphttp -> CloudWatch OTLP endpoint (monitoring.<region>.amazonaws.com) via SigV4.
-        #     These are queryable with PromQL (labels via @resource.*) and back the dashboard below.
-        #   - awsemf   -> ClaudeCode namespace (classic CloudWatch metrics, 15-month retention/alarms).
-        # Two independent pipelines so a failing OTLP export can't stall the EMF path or the receiver.
+        # signed-in client's telemetry here via telemetry.forward_to in gateway.yaml) and exports
+        # via otlp_http to the CloudWatch OTLP-native endpoint (monitoring.<region>.amazonaws.com)
+        # over SigV4. These metrics are PromQL-queryable (labels via @resource.*) and feed the
+        # built-in CloudWatch Coding Agent Insights dashboards (GenAI Observability > Coding Agent
+        # Insights > Claude Code) -- the sole monitoring surface for this stack.
         # Non-essential: if the collector crashes, inference keeps flowing.
         # Config is passed inline via AOT_CONFIG_CONTENT so no SSM parameter or extra file is needed.
         - Name: otel-collector
@@ -462,7 +451,7 @@ Resources:
                 processors:
                   batch: {}
                 exporters:
-                  otlphttp:
+                  otlp_http:
                     endpoint: https://monitoring.${AWS::Region}.amazonaws.com
                     auth:
                       authenticator: sigv4auth
@@ -471,28 +460,16 @@ Resources:
                     sending_queue:
                       enabled: true
                       queue_size: 1000
-                  awsemf:
-                    region: ${AWS::Region}
-                    namespace: ClaudeCode
-                    log_group_name: ${MetricsLogGroup}
-                    log_stream_name: gateway
-                    dimension_rollup_option: NoDimensionRollup
-                    resource_to_telemetry_conversion:
-                      enabled: true
                 service:
                   extensions: [sigv4auth]
                   telemetry:
                     logs:
                       level: warn
                   pipelines:
-                    metrics/emf:
-                      receivers: [otlp]
-                      processors: [batch]
-                      exporters: [awsemf]
                     metrics/otlp:
                       receivers: [otlp]
                       processors: [batch]
-                      exporters: [otlphttp]
+                      exporters: [otlp_http]
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -528,53 +505,6 @@ Resources:
           ContainerName: gateway
           ContainerPort: 8080
 
-  # ---------- Dashboard ----------
-  # Deploys with the stack so operators get a working view out of the box. Widgets query the
-  # OTLP-native metrics (PromQL, @resource.service.name="claude-code") the collector ships, plus
-  # AWS/Bedrock service health. Panels populate once a signed-in developer generates telemetry.
-  Dashboard:
-    Type: AWS::CloudWatch::Dashboard
-    Properties:
-      DashboardName: !Sub '${NamePrefix}-dashboard'
-      DashboardBody: !Sub |
-        {
-          "widgets": [
-            { "type": "text", "x": 0, "y": 0, "width": 24, "height": 2, "properties": { "markdown": "# Claude Code on Bedrock - Gateway Telemetry\nPer-user usage, cost, and productivity via the Claude apps gateway. Metrics are ingested through the CloudWatch OTLP endpoint and identity-stamped by the gateway (user.email, model).", "background": "transparent" } },
-
-            { "type": "chart", "x": 0, "y": 2, "width": 6, "height": 4, "properties": { "title": "Total Cost (USD)", "view": "number", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.cost.usage\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "USD" } ] }, "plotOptions": { "style": { "numberOptions": { "sparkline": true } } } } },
-            { "type": "chart", "x": 6, "y": 2, "width": 6, "height": 4, "properties": { "title": "Total Tokens", "view": "number", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.token.usage\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Tokens" } ] }, "plotOptions": { "style": { "numberOptions": { "sparkline": true } } } } },
-            { "type": "chart", "x": 12, "y": 2, "width": 6, "height": 4, "properties": { "title": "Active Users", "view": "number", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "count(group by (\"user.email\")({\"claude_code.session.count\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60, "label": "Users" } ] }, "plotOptions": { "style": { "numberOptions": { "sparkline": true } } } } },
-            { "type": "chart", "x": 18, "y": 2, "width": 6, "height": 4, "properties": { "title": "Cache Hit Rate (%)", "view": "number", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.token.usage\", type=\"cacheRead\", \"@resource.service.name\"=\"claude-code\"}) / sum({\"claude_code.token.usage\", \"@resource.service.name\"=\"claude-code\"}) * 100", "step": 60, "label": "%" } ] }, "plotOptions": { "style": { "numberOptions": { "sparkline": true } } } } },
-
-            { "type": "text", "x": 0, "y": 6, "width": 24, "height": 1, "properties": { "markdown": "## Cost", "background": "transparent" } },
-            { "type": "chart", "x": 0, "y": 7, "width": 8, "height": 6, "properties": { "title": "Cost Over Time (USD)", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.cost.usage\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Total USD" } ] }, "plotOptions": { "style": { "lineOptions": { "filled": true } } } } },
-            { "type": "chart", "x": 8, "y": 7, "width": 8, "height": 6, "properties": { "title": "Cost by Model (USD)", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "topk(20, sum by (model)({\"claude_code.cost.usage\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60 } ] }, "plotOptions": { "style": { "lineOptions": { "stacked": true } } } } },
-            { "type": "chart", "x": 16, "y": 7, "width": 8, "height": 6, "properties": { "title": "Top Users by Cost (USD)", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "topk(20, sum by (\"user.email\")({\"claude_code.cost.usage\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60 } ] } } },
-
-            { "type": "text", "x": 0, "y": 13, "width": 24, "height": 1, "properties": { "markdown": "## Tokens", "background": "transparent" } },
-            { "type": "chart", "x": 0, "y": 14, "width": 8, "height": 6, "properties": { "title": "Tokens by Type", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "in", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.token.usage\", type=\"input\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Input" }, { "id": "out", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.token.usage\", type=\"output\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Output" }, { "id": "cr", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.token.usage\", type=\"cacheRead\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Cache Read" }, { "id": "cc", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.token.usage\", type=\"cacheCreation\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Cache Creation" } ] } } },
-            { "type": "chart", "x": 8, "y": 14, "width": 8, "height": 6, "properties": { "title": "Tokens by Model", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "topk(20, sum by (model)({\"claude_code.token.usage\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60 } ] }, "plotOptions": { "style": { "lineOptions": { "stacked": true } } } } },
-            { "type": "chart", "x": 16, "y": 14, "width": 8, "height": 6, "properties": { "title": "Top Users by Tokens", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "topk(20, sum by (\"user.email\")({\"claude_code.token.usage\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60 } ] } } },
-
-            { "type": "text", "x": 0, "y": 20, "width": 24, "height": 1, "properties": { "markdown": "## Developer Productivity", "background": "transparent" } },
-            { "type": "chart", "x": 0, "y": 21, "width": 6, "height": 6, "properties": { "title": "Lines of Code", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "add", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.lines_of_code.count\", type=\"added\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Added" }, { "id": "rem", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.lines_of_code.count\", type=\"removed\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Removed" } ] } } },
-            { "type": "chart", "x": 6, "y": 21, "width": 6, "height": 6, "properties": { "title": "Commits", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.commit.count\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "Commits" } ] }, "plotOptions": { "style": { "lineOptions": { "filled": true } } } } },
-            { "type": "chart", "x": 12, "y": 21, "width": 6, "height": 6, "properties": { "title": "Pull Requests", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.pull_request.count\", \"@resource.service.name\"=\"claude-code\"})", "step": 60, "label": "PRs" } ] }, "plotOptions": { "style": { "lineOptions": { "filled": true } } } } },
-            { "type": "chart", "x": 18, "y": 21, "width": 6, "height": 6, "properties": { "title": "Active Hours", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "sum({\"claude_code.active_time.total\", \"@resource.service.name\"=\"claude-code\"}) / 3600", "step": 60, "label": "Hours" } ] }, "plotOptions": { "style": { "lineOptions": { "filled": true } } } } },
-
-            { "type": "text", "x": 0, "y": 27, "width": 24, "height": 1, "properties": { "markdown": "## Code Edits", "background": "transparent" } },
-            { "type": "chart", "x": 0, "y": 28, "width": 8, "height": 6, "properties": { "title": "Edit Decisions (accept vs reject)", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "topk(20, sum by (decision)({\"claude_code.code_edit_tool.decision\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60 } ] } } },
-            { "type": "chart", "x": 8, "y": 28, "width": 8, "height": 6, "properties": { "title": "Edits by Tool", "view": "line", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "topk(20, sum by (tool_name)({\"claude_code.code_edit_tool.decision\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60 } ] } } },
-            { "type": "chart", "x": 16, "y": 28, "width": 8, "height": 6, "properties": { "title": "Code Generation by Language", "view": "pie", "region": "${AWS::Region}", "data": { "queries": [ { "id": "a", "type": "cloudwatch-metrics", "language": "PromQL", "query": "topk(20, sum by (language)({\"claude_code.code_edit_tool.decision\", \"@resource.service.name\"=\"claude-code\"}))", "step": 60 } ] } } },
-
-            { "type": "text", "x": 0, "y": 34, "width": 24, "height": 1, "properties": { "markdown": "## Bedrock API Health", "background": "transparent" } },
-            { "type": "metric", "x": 0, "y": 35, "width": 6, "height": 6, "properties": { "title": "Bedrock Throttles by Model", "view": "timeSeries", "stacked": false, "region": "${AWS::Region}", "period": 300, "yAxis": { "left": { "min": 0 } }, "metrics": [ [ { "expression": "SELECT SUM(InvocationThrottles) FROM \"AWS/Bedrock\" GROUP BY ModelId", "id": "throttles", "region": "${AWS::Region}" } ] ] } },
-            { "type": "metric", "x": 6, "y": 35, "width": 6, "height": 6, "properties": { "title": "Bedrock Client Errors by Model", "view": "timeSeries", "stacked": false, "region": "${AWS::Region}", "period": 300, "yAxis": { "left": { "min": 0 } }, "metrics": [ [ { "expression": "SELECT SUM(InvocationClientErrors) FROM \"AWS/Bedrock\" GROUP BY ModelId", "id": "clienterrors", "region": "${AWS::Region}" } ] ] } },
-            { "type": "metric", "x": 12, "y": 35, "width": 6, "height": 6, "properties": { "title": "Bedrock Server Errors by Model", "view": "timeSeries", "stacked": false, "region": "${AWS::Region}", "period": 300, "yAxis": { "left": { "min": 0 } }, "metrics": [ [ { "expression": "SELECT SUM(InvocationServerErrors) FROM \"AWS/Bedrock\" GROUP BY ModelId", "id": "servererrors", "region": "${AWS::Region}" } ] ] } },
-            { "type": "metric", "x": 18, "y": 35, "width": 6, "height": 6, "properties": { "title": "Bedrock Invocation Latency (avg ms)", "view": "timeSeries", "stacked": false, "region": "${AWS::Region}", "period": 300, "yAxis": { "left": { "min": 0 } }, "metrics": [ [ { "expression": "SELECT AVG(InvocationLatency) FROM \"AWS/Bedrock\" GROUP BY ModelId", "id": "latency", "region": "${AWS::Region}" } ] ] } }
-          ]
-        }
-
 Outputs:
   GatewayUrl:
     Value: !Sub 'https://${GatewayHostname}'
@@ -597,6 +527,3 @@ Outputs:
       # Keyed on AWS::StackName so each parallel stack gets a unique export automatically.
       # client-vpn.yaml imports this via its GatewayStackName parameter.
       Name: !Sub '${AWS::StackName}-AlbSecurityGroupId'
-  DashboardUrl:
-    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards/dashboard/${NamePrefix}-dashboard'
-    Description: CloudWatch dashboard for gateway usage, cost, and Bedrock health
