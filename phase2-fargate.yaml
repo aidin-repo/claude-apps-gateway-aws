@@ -85,9 +85,8 @@ Resources:
         PasswordLength: 30
         ExcludePunctuation: true
 
-  # Populated at deploy time from the OidcClientId + OidcClientSecret NoEcho parameters.
-  # Ships with the real values from the first CREATE, so the stack cannot report success
-  # with a non-functional /login (as the old REPLACE_ME placeholder path allowed).
+  # Populated at deploy time from the OidcClientId + OidcClientSecret NoEcho parameters,
+  # so a successful CREATE always has a working /login.
   OidcSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
@@ -337,14 +336,6 @@ Resources:
                 Resource:
                   - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.anthropic.*
                   - arn:aws:bedrock:*::foundation-model/anthropic.*
-              # A bedrock:GuardrailIdentifier explicit-Deny condition was tested here (live,
-              # confirmed via real claude CLI requests: "403 upstream denied the request") with
-              # both DRAFT and published version 12 of guardrail dc1kiqobdvbt. Both produced the
-              # identical IAM error, confirming the guardrail version was never the variable --
-              # the gateway has no config surface (upstreams.bedrock/models/managed.cli) to attach
-              # a guardrail to its own Bedrock calls, so this condition can never be satisfied.
-              # Rolled back. Guardrail enforcement for this gateway needs either native support
-              # added upstream, or a different enforcement layer entirely.
         - PolicyName: read-config
           PolicyDocument:
             Version: '2012-10-17'
