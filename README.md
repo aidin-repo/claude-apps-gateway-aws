@@ -23,7 +23,7 @@ Once you accept that, the rest of the shape is forced: the load balancer has to 
 - **RDS Postgres 16** keeps gateway state: sessions and spend counters.
 - **Secrets Manager** holds the JWT signing key, database password, OIDC client secret, and admin API key. They're injected into the task at runtime, so nothing sensitive is baked into the container image.
 - **S3-hosted `gateway.yaml`** is the live config (versioned, TLS-only). Change your models, access rules, or spend caps by editing and re-uploading. No image rebuild.
-- **CloudWatch dashboard** shows per-user cost, token usage, activity, and Bedrock API health, fed by OTLP (OpenTelemetry) and EMF (Embedded Metric Format) data from the collector.
+- **CloudWatch Coding Agent Insights** is AWS's built-in dashboard set (console: GenAI Observability > Coding Agent Insights > Claude Code). It populates automatically from the OTLP metrics the collector ships and shows per-user cost, token usage, activity, and productivity. There's no custom dashboard to build or maintain.
 - **Client VPN endpoint** is a mutual-TLS VPN that gives laptops their private path to the internal ALB.
 
 ## How it fits together
@@ -48,7 +48,7 @@ graph TD
     subgraph AWSsvc["AWS services"]
         S3C["S3 config bucket<br/>gateway.yaml"]
         SM["Secrets Manager"]
-        CWM["CloudWatch OTLP metrics + EMF<br/>&lt;prefix&gt;-dashboard"]
+        CWM["CloudWatch OTLP metrics<br/>Coding Agent Insights (built-in)"]
         BED["Amazon Bedrock"]
     end
     CLI --> VPNC
@@ -69,6 +69,31 @@ graph TD
 Following a single request makes the diagram concrete. A developer connects the VPN, runs `claude`, and signs in. The CLI opens their browser to your identity provider for SSO; the gateway validates that OIDC login and mints a short-lived bearer token. From then on every `claude` request travels laptop → VPN → internal ALB → gateway. The gateway checks the token, applies your model and spend-cap policy, and only then calls Bedrock using the *gateway's* IAM role. The credential never leaves the gateway; the laptop only ever holds a temporary token.
 
 > **What it costs.** Sitting idle, this runs about **$115/month**: roughly $72 for the Client VPN endpoint (billed per hour, regardless of traffic), $18 for the internal ALB, $15 for RDS `db.t4g.micro`, plus small Fargate and CloudWatch charges. Tear it down between demos to keep spend near zero. Production would add NAT and Multi-AZ RDS on top. There's a full breakdown near the end.
+
+## How telemetry reaches CloudWatch
+
+Usage metrics follow a separate path from inference, and it's built so developers configure nothing on their laptops. Because `gateway.yaml` sets `telemetry.forward_to` (alongside `listen.public_url`), the gateway pushes `OTEL_*` environment variables down to every signed-in client. Each client then emits OTLP metrics back to the gateway automatically.
+
+```
+Claude Code CLI (laptop)
+      │  OTLP/HTTP metrics
+      ▼
+Gateway container  (telemetry.forward_to -> localhost:4318)
+      │  OTLP over the shared task network namespace
+      ▼
+ADOT collector sidecar  (same Fargate task)
+      └── otlphttp -> CloudWatch OTLP endpoint (monitoring.<region>.amazonaws.com)  [PromQL; feeds Coding Agent Insights]
+```
+
+The pieces, in order:
+
+1. **The gateway relays to the sidecar over loopback.** Client metrics are forwarded to `http://localhost:4318`, the ADOT collector running in the same Fargate task. This works only because the stack sets `CLAUDE_GATEWAY_ALLOW_LOOPBACK=1`; the gateway's SSRF guard blocks loopback by default (link-local and metadata addresses stay blocked). Only metrics are forwarded (`logs: false`, `traces: false`), since logs and traces can carry commands and file paths.
+2. **The collector exports over SigV4** through a single pipeline. The `otlphttp` path ships to the CloudWatch OTLP-native endpoint; these metrics are PromQL-queryable (labels like `@resource.service.name`, `user.email`, `model`) and **feed the built-in CloudWatch Coding Agent Insights dashboards** (GenAI Observability > Coding Agent Insights > Claude Code), which this stack relies on for monitoring. The sidecar is non-essential, so if it crashes, inference keeps flowing.
+3. **The ECS task role authorizes it with SigV4**, so no long-lived credentials are involved. `PutMetricData` is deliberately left un-scoped by a `cloudwatch:namespace` condition: CloudWatch OTLP ingestion carries no custom namespace, and a namespace condition would 403 and silently drop every OTLP metric.
+
+> **One-time approval on each laptop.** The pushed OTLP endpoint is not on the CLI's environment safe-list, so each interactive client sees a one-time security approval dialog on its next startup after telemetry is enabled. That's expected. Accepting it once is what lets the client send metrics to the gateway.
+
+**Where to view it.** Open the CloudWatch console, then GenAI Observability > Coding Agent Insights > Claude Code. The dashboards populate automatically within a few minutes of a signed-in developer generating telemetry; there's nothing to import. You can slice by user, model, and other identity attributes, and the same metrics are queryable with PromQL against `monitoring.<region>.amazonaws.com` if you want to build your own alarms.
 
 ## Before you start
 
@@ -291,7 +316,7 @@ If you're weighing how to give a team Claude Code on Bedrock without hand-managi
 - [Route 53 private hosted zones](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/hosted-zones-private.html)
 - [AWS Secrets Manager](https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html)
 - [Amazon RDS for PostgreSQL](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html)
-- [AWS Distro for OpenTelemetry (ADOT)](https://aws-otel.github.io/) and [CloudWatch Embedded Metric Format](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format.html)
+- [AWS Distro for OpenTelemetry (ADOT)](https://aws-otel.github.io/) and [CloudWatch Coding Agent Insights](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/coding-agents-insights.html)
 - [AWS CloudFormation](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/Welcome.html)
 
 **Standards**
