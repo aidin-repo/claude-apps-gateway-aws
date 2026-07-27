@@ -76,9 +76,8 @@ managed:
     - match: {}                     # catch-all: everyone, since no group-specific rules are set
       cli:
         availableModels: [claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-haiku-4-5]
-        # A top-level `permissionMode` key was tried and REJECTED at boot ("unknown settings key").
-        # Per the gateway config reference, `cli` is a full managed-settings.json document, so the
-        # correct key is nested under `permissions.defaultMode` (same as local settings.json).
+        # `cli` is a full managed-settings.json document, so permission mode nests under
+        # `permissions.defaultMode` (same as local settings.json).
         permissions:
           defaultMode: auto
         # Auto mode is feature-gated behind this env var -- without it the CLI shows
@@ -87,18 +86,6 @@ managed:
         # on each interactive client's next startup (same as the pushed OTEL endpoint below).
         env:
           CLAUDE_CODE_ENABLE_AUTO_MODE: "1"
-        # Bedrock Guardrail (phi-test-guardrail, dc1kiqobdvbt) was tested here and rolled back.
-        # ANTHROPIC_CUSTOM_HEADERS (X-Amzn-Bedrock-GuardrailIdentifier/-GuardrailVersion) is a
-        # client-side header for setups where the CLI itself calls Bedrock directly. In this
-        # gateway deployment, the GATEWAY calls Bedrock with its own upstream credential, so a
-        # header the CLI sends to the gateway never reaches Bedrock. Confirmed live from the
-        # claude terminal with both the DRAFT guardrail version and published version 12: both
-        # produced the identical "403 upstream denied the request" error (traced to an IAM
-        # bedrock:GuardrailIdentifier deny condition that was also tested and rolled back --
-        # see phase2-fargate.yaml TaskRole), proving the version number was never the variable.
-        # Guardrail enforcement for this gateway requires either the gateway vendor adding a
-        # native guardrail field to upstreams.bedrock/models/managed.cli, or a different
-        # enforcement layer (e.g. a Bedrock resource policy) that doesn't depend on the gateway.
 
 # Example group-scoped policy (uncomment and set groups to your IdP group names to restrict a
 # subset of users to fewer models / denied tools):
