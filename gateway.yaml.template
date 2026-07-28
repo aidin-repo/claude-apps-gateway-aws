@@ -58,6 +58,10 @@ admin:
 # pinned binary are not in that catalog, so add them explicitly below.
 auto_include_builtin_models: true
 models:
+  - id: claude-opus-5
+    label: Claude Opus 5
+    upstream_model:
+      bedrock: us.anthropic.claude-opus-5
   - id: claude-sonnet-5
     label: Claude Sonnet 5
     upstream_model:
@@ -75,7 +79,7 @@ managed:
   policies:
     - match: {}                     # catch-all: everyone, since no group-specific rules are set
       cli:
-        availableModels: [claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-haiku-4-5]
+        availableModels: [claude-opus-5, claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-haiku-4-5]
         # `cli` is a full managed-settings.json document, so permission mode nests under
         # `permissions.defaultMode` (same as local settings.json).
         permissions:
