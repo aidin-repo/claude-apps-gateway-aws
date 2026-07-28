@@ -284,6 +284,24 @@ Resources:
       LogGroupName: !Sub '/ecs/${NamePrefix}'
       RetentionInDays: 14
 
+  # Claude Code OTel events (the logs signal) land here via the collector's otlp_http/logs exporter
+  # (CloudWatch Logs OTLP endpoint). The log group name is passed to the collector as the
+  # x-aws-log-group header. Metrics go to the CloudWatch OTLP endpoint; traces go to X-Ray.
+  EventsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/claude-code/${NamePrefix}-events'
+      RetentionInDays: 30
+
+  # The CloudWatch Logs OTLP endpoint (unlike classic PutLogEvents) does NOT auto-create the
+  # stream -- it 400s with "log stream does not exist" -- so pre-create the stream the collector's
+  # otlp_http/logs exporter targets via the x-aws-log-stream header.
+  EventsLogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref EventsLogGroup
+      LogStreamName: gateway
+
   Cluster:
     Type: AWS::ECS::Cluster
     Properties:
@@ -343,13 +361,16 @@ Resources:
               - Effect: Allow
                 Action: s3:GetObject
                 Resource: !Sub '${ConfigBucket.Arn}/gateway.yaml'
-        # The ADOT collector sidecar uses the task role (SigV4) to publish metrics to the
-        # CloudWatch OTLP-native endpoint (monitoring.<region>.amazonaws.com/v1/metrics). This is
-        # the PromQL-queryable store that Coding Agent Insights reads from. OTLP ingestion
-        # authorizes as cloudwatch:PutMetricData on resource dataset/default and carries NO custom
-        # namespace, so PutMetricData MUST NOT be scoped by a cloudwatch:namespace condition --
-        # doing so denies the request (403) and silently drops every OTLP metric. (A prior
-        # namespace-scoped condition did exactly that.)
+        # The ADOT collector sidecar uses the task role (SigV4) to publish all three signals:
+        #   - metrics -> CloudWatch OTLP endpoint (monitoring.<region>.amazonaws.com/v1/metrics),
+        #     the PromQL store Coding Agent Insights reads from. OTLP ingestion authorizes as
+        #     cloudwatch:PutMetricData on resource dataset/default and carries NO custom namespace,
+        #     so PutMetricData MUST NOT be scoped by a cloudwatch:namespace condition -- doing so
+        #     denies the request (403) and silently drops every OTLP metric.
+        #   - logs (events) -> CloudWatch Logs OTLP endpoint (logs.<region>.amazonaws.com/v1/logs),
+        #     targeting EventsLogGroup via the x-aws-log-group header: logs:PutLogEvents/CreateLogStream.
+        #   - traces -> X-Ray via the awsxray exporter: xray:PutTraceSegments/PutTelemetryRecords
+        #     (X-Ray write actions don't support resource-level scoping, so Resource is '*').
         # Trade-off of the unconditioned PutMetricData: the task role can publish to any metric
         # namespace. That blast radius is inherent to CloudWatch OTLP ingestion (it can't be
         # namespace-scoped) and is the AWS-recommended in-AWS path (SigV4, no long-lived token).
@@ -359,6 +380,18 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: cloudwatch:PutMetricData
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:PutLogEvents
+                  - logs:CreateLogStream
+                Resource:
+                  - !GetAtt EventsLogGroup.Arn
+                  - !Sub '${EventsLogGroup.Arn}:*'
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
                 Resource: '*'
 
   TaskDefinition:
@@ -414,11 +447,16 @@ Resources:
               awslogs-stream-prefix: gateway
 
         # ADOT collector sidecar. Receives OTLP/HTTP on localhost:4318 (the gateway relays each
-        # signed-in client's telemetry here via telemetry.forward_to in gateway.yaml) and exports
-        # via otlp_http to the CloudWatch OTLP-native endpoint (monitoring.<region>.amazonaws.com)
-        # over SigV4. These metrics are PromQL-queryable (labels via @resource.*) and feed the
-        # built-in CloudWatch Coding Agent Insights dashboards (GenAI Observability > Coding Agent
-        # Insights > Claude Code) -- the sole monitoring surface for this stack.
+        # signed-in client's metrics, events, and traces here via telemetry.forward_to in
+        # gateway.yaml) and fans out over SigV4 to three AWS destinations:
+        #   - metrics -> CloudWatch OTLP endpoint (monitoring.<region>.amazonaws.com). PromQL-queryable
+        #     and feeds the built-in Coding Agent Insights dashboards (GenAI Observability).
+        #   - logs/events -> CloudWatch Logs OTLP endpoint (logs.<region>.amazonaws.com/v1/logs),
+        #     into EventsLogGroup via the x-aws-log-group header. Carries the identity-stamped audit
+        #     trail (prompts, tool calls/results) when the OTEL_LOG_* gates in gateway.yaml are set.
+        #   - traces -> X-Ray via the awsxray exporter (per-turn spans; requires the client beta gate
+        #     CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1, set in gateway.yaml's managed cli.env).
+        # awsxray signs with the task role directly; the OTLP metrics/logs exporters use sigv4auth.
         # Non-essential: if the collector crashes, inference keeps flowing.
         # Config is passed inline via AOT_CONFIG_CONTENT so no SSM parameter or extra file is needed.
         - Name: otel-collector
@@ -433,6 +471,9 @@ Resources:
                 extensions:
                   sigv4auth:
                     service: monitoring
+                    region: ${AWS::Region}
+                  sigv4auth/logs:
+                    service: logs
                     region: ${AWS::Region}
                 receivers:
                   otlp:
@@ -451,8 +492,18 @@ Resources:
                     sending_queue:
                       enabled: true
                       queue_size: 1000
+                  otlp_http/logs:
+                    logs_endpoint: https://logs.${AWS::Region}.amazonaws.com/v1/logs
+                    compression: gzip
+                    headers:
+                      x-aws-log-group: ${EventsLogGroup}
+                      x-aws-log-stream: gateway
+                    auth:
+                      authenticator: sigv4auth/logs
+                  awsxray:
+                    region: ${AWS::Region}
                 service:
-                  extensions: [sigv4auth]
+                  extensions: [sigv4auth, sigv4auth/logs]
                   telemetry:
                     logs:
                       level: warn
@@ -461,6 +512,14 @@ Resources:
                       receivers: [otlp]
                       processors: [batch]
                       exporters: [otlp_http]
+                    logs/otlp:
+                      receivers: [otlp]
+                      processors: [batch]
+                      exporters: [otlp_http/logs]
+                    traces/xray:
+                      receivers: [otlp]
+                      processors: [batch]
+                      exporters: [awsxray]
           LogConfiguration:
             LogDriver: awslogs
             Options:

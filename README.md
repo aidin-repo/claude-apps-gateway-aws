@@ -18,12 +18,13 @@ Once you accept that, the rest of the shape is forced: the load balancer has to 
 
 ## What's in the box, and what each piece is for
 
-- **ECS Fargate task** runs the `claude gateway` binary, the proxy that authenticates users and forwards their requests to Bedrock. Riding alongside it is an **ADOT collector** sidecar (AWS Distro for OpenTelemetry), which ships usage metrics to CloudWatch.
+- **ECS Fargate task** runs the `claude gateway` binary, the proxy that authenticates users and forwards their requests to Bedrock. Riding alongside it is an **ADOT collector** sidecar (AWS Distro for OpenTelemetry), which ships all three OpenTelemetry signals to AWS: metrics to CloudWatch, events to CloudWatch Logs, and traces to X-Ray.
 - **Internal ALB** is an HTTPS-only load balancer (443, wildcard cert) reachable *only* from inside your VPC. A Route 53 alias points the gateway hostname at its private IP.
 - **RDS Postgres 16** keeps gateway state: sessions and spend counters.
 - **Secrets Manager** holds the JWT signing key, database password, OIDC client secret, and admin API key. They're injected into the task at runtime, so nothing sensitive is baked into the container image.
 - **S3-hosted `gateway.yaml`** is the live config (versioned, TLS-only). Change your models, access rules, or spend caps by editing and re-uploading. No image rebuild.
 - **CloudWatch Coding Agent Insights** is AWS's built-in dashboard set (console: GenAI Observability > Coding Agent Insights > Claude Code). It populates automatically from the OTLP metrics the collector ships and shows per-user cost, token usage, activity, and productivity. There's no custom dashboard to build or maintain.
+- **CloudWatch Logs and X-Ray** hold the richer signals: the identity-stamped event stream (prompts, tool calls and results, permission decisions) lands in a CloudWatch Logs group, and per-turn traces (interaction → LLM request → tool execution spans) land in X-Ray. These are the audit trail and latency view that complement the metrics dashboards.
 - **Client VPN endpoint** is a mutual-TLS VPN that gives laptops their private path to the internal ALB.
 
 ## How it fits together
@@ -48,7 +49,7 @@ graph TD
     subgraph AWSsvc["AWS services"]
         S3C["S3 config bucket<br/>gateway.yaml"]
         SM["Secrets Manager"]
-        CWM["CloudWatch OTLP metrics<br/>Coding Agent Insights (built-in)"]
+        CWM["CloudWatch metrics -> Coding Agent Insights<br/>CloudWatch Logs (events)<br/>X-Ray (traces)"]
         BED["Amazon Bedrock"]
     end
     CLI --> VPNC
@@ -72,28 +73,33 @@ Following a single request makes the diagram concrete. A developer connects the 
 
 ## How telemetry reaches CloudWatch
 
-Usage metrics follow a separate path from inference, and it's built so developers configure nothing on their laptops. Because `gateway.yaml` sets `telemetry.forward_to` (alongside `listen.public_url`), the gateway pushes `OTEL_*` environment variables down to every signed-in client. Each client then emits OTLP metrics back to the gateway automatically.
+Telemetry follows a separate path from inference, and it's built so developers configure nothing on their laptops. Because `gateway.yaml` sets `telemetry.forward_to` (alongside `listen.public_url`), the gateway pushes `OTEL_*` environment variables to every signed-in client, which then emits all three OpenTelemetry signals — metrics, events (logs), and traces — back to the gateway automatically.
 
 ```
 Claude Code CLI (laptop)
-      │  OTLP/HTTP metrics
+      │  OTLP/HTTP: metrics + events + traces
       ▼
 Gateway container  (telemetry.forward_to -> localhost:4318)
       │  OTLP over the shared task network namespace
       ▼
-ADOT collector sidecar  (same Fargate task)
-      └── otlphttp -> CloudWatch OTLP endpoint (monitoring.<region>.amazonaws.com)  [PromQL; feeds Coding Agent Insights]
+ADOT collector sidecar  (same Fargate task), fans out over SigV4:
+      ├── metrics -> CloudWatch OTLP endpoint (monitoring.<region>.amazonaws.com)  [PromQL; Coding Agent Insights]
+      ├── events  -> CloudWatch Logs OTLP endpoint (logs.<region>.amazonaws.com)   [audit trail; <prefix>-events group]
+      └── traces  -> X-Ray (awsxray exporter)                                       [per-turn spans]
 ```
 
 The pieces, in order:
 
-1. **The gateway relays to the sidecar over loopback.** Client metrics are forwarded to `http://localhost:4318`, the ADOT collector running in the same Fargate task. This works only because the stack sets `CLAUDE_GATEWAY_ALLOW_LOOPBACK=1`; the gateway's SSRF guard blocks loopback by default (link-local and metadata addresses stay blocked). Only metrics are forwarded (`logs: false`, `traces: false`), since logs and traces can carry commands and file paths.
-2. **The collector exports over SigV4** through a single pipeline. The `otlphttp` path ships to the CloudWatch OTLP-native endpoint; these metrics are PromQL-queryable (labels like `@resource.service.name`, `user.email`, `model`) and **feed the built-in CloudWatch Coding Agent Insights dashboards** (GenAI Observability > Coding Agent Insights > Claude Code), which this stack relies on for monitoring. The sidecar is non-essential, so if it crashes, inference keeps flowing.
-3. **The ECS task role authorizes it with SigV4**, so no long-lived credentials are involved. `PutMetricData` is deliberately left un-scoped by a `cloudwatch:namespace` condition: CloudWatch OTLP ingestion carries no custom namespace, and a namespace condition would 403 and silently drop every OTLP metric.
+1. **The gateway relays to the sidecar over loopback.** Client telemetry is forwarded to `http://localhost:4318`, the ADOT collector in the same Fargate task. This works only because the stack sets `CLAUDE_GATEWAY_ALLOW_LOOPBACK=1`; the gateway's SSRF guard blocks loopback by default (link-local and metadata addresses stay blocked). All three signals are relayed (`metrics`, `logs`, `traces` are all `true` in `forward_to`).
+2. **The collector fans out over SigV4** through three independent pipelines, so one failing export can't stall another. Metrics go to the CloudWatch OTLP endpoint (PromQL-queryable, feeding Coding Agent Insights). Events go to the CloudWatch Logs OTLP endpoint, into the `<prefix>-events` log group. Traces go to X-Ray via the `awsxray` exporter. The sidecar is non-essential, so if it crashes, inference keeps flowing.
+3. **Content capture is opt-in and gated.** Events and spans redact prompt text, tool arguments, and tool I/O by default. This stack turns them on (`OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_ASSISTANT_RESPONSES`, `OTEL_LOG_TOOL_DETAILS`, `OTEL_LOG_TOOL_CONTENT`) through the managed `cli.env` block, and enables tracing with the beta gate `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` (the gateway doesn't push that one). This content goes only to your AWS account, never to Anthropic. `OTEL_LOG_RAW_API_BODIES` (full request/response JSON) is intentionally left off — it's large and overlaps with Bedrock model-invocation logging.
+4. **The ECS task role authorizes it with SigV4** (no long-lived credentials): `cloudwatch:PutMetricData` for metrics — left un-scoped by a `cloudwatch:namespace` condition, since OTLP metric ingestion carries no custom namespace and a condition would 403 and silently drop every metric — plus `logs:PutLogEvents` on the events log group and `xray:PutTraceSegments`/`PutTelemetryRecords` for traces.
 
-> **One-time approval on each laptop.** The pushed OTLP endpoint is not on the CLI's environment safe-list, so each interactive client sees a one-time security approval dialog on its next startup after telemetry is enabled. That's expected. Accepting it once is what lets the client send metrics to the gateway.
+> **One-time approval on each laptop.** The pushed OTLP endpoint and the `OTEL_LOG_*` / beta env vars are not on the CLI's environment safe-list, so each interactive client sees a one-time security approval dialog on its next startup after a telemetry change. That's expected; accepting it once is what lets the client send telemetry.
 
-**Where to view it.** Open the CloudWatch console, then GenAI Observability > Coding Agent Insights > Claude Code. The dashboards populate automatically within a few minutes of a signed-in developer generating telemetry; there's nothing to import. You can slice by user, model, and other identity attributes, and the same metrics are queryable with PromQL against `monitoring.<region>.amazonaws.com` if you want to build your own alarms.
+> **A note on the log stream.** The CloudWatch Logs OTLP endpoint does not auto-create the log stream (it 400s with "log stream does not exist"), so the template pre-creates both the `<prefix>-events` log group and its `gateway` stream. No manual setup.
+
+**Where to view it.** Metrics: CloudWatch console > GenAI Observability > Coding Agent Insights > Claude Code (populates within minutes; also PromQL-queryable against `monitoring.<region>.amazonaws.com`). Events: CloudWatch Logs, the `/aws/claude-code/<prefix>-events` log group. Traces: the X-Ray section of the CloudWatch console.
 
 ## Before you start
 
@@ -237,7 +243,7 @@ A user's `oidc_sub` shows up in the `user_id` field of `effective`.
 | Internal ALB | $0.025 | $18 |
 | RDS db.t4g.micro | $0.021 | $15 |
 | Fargate (0.5 vCPU, 2 GB) | $0.024 | $10 |
-| CloudWatch (logs + metrics) | — | ~$5 |
+| CloudWatch + X-Ray (metrics, events, traces) | — | ~$5 |
 | **Total idle** | | **~$120** |
 | Bedrock inference | usage-based | on top |
 

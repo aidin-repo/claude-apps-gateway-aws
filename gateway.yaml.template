@@ -86,6 +86,16 @@ managed:
         # on each interactive client's next startup (same as the pushed OTEL endpoint below).
         env:
           CLAUDE_CODE_ENABLE_AUTO_MODE: "1"
+          # Distributed tracing is beta-gated and the gateway does NOT push this var, so set it here.
+          CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1"
+          # Content capture for events and trace spans (all default-off). Enables prompt text,
+          # assistant responses, tool parameters, and tool input/output. This data goes only to your
+          # collector, never to Anthropic. OTEL_LOG_RAW_API_BODIES (full request/response JSON) is
+          # intentionally omitted -- it's huge and Bedrock invocation logging already captures bodies.
+          OTEL_LOG_USER_PROMPTS: "1"
+          OTEL_LOG_ASSISTANT_RESPONSES: "1"
+          OTEL_LOG_TOOL_DETAILS: "1"
+          OTEL_LOG_TOOL_CONTENT: "1"
 
 # Example group-scoped policy (uncomment and set groups to your IdP group names to restrict a
 # subset of users to fewer models / denied tools):
@@ -109,11 +119,14 @@ managed:
 # non-safe-list var, so each interactive client sees a one-time approval dialog on next startup.
 # NOTE: the deployed stack sets CLAUDE_GATEWAY_ALLOW_LOOPBACK=1 on the gateway container so its
 # SSRF guard permits this localhost relay to the sidecar.
-# Metrics only by default; logs/traces can carry commands and file paths, so leave them off unless
-# the destination's access controls warrant it.
+# Full telemetry: metrics + events(logs) + traces. The gateway relays each signal to the ADOT
+# collector sidecar, which fans out to CloudWatch metrics, CloudWatch Logs (events), and X-Ray
+# (traces). Logs and traces can carry prompt text, commands, and file paths; that content is gated
+# by the OTEL_LOG_* vars in the managed cli.env block above and is acceptable for this deployment
+# because Bedrock model-invocation logging already records prompts/completions here.
 telemetry:
   forward_to:
-    - url: http://localhost:4318   # the collector sidecar (same task); gateway appends /v1/metrics
+    - url: http://localhost:4318   # collector sidecar (same task); gateway appends /v1/{metrics,logs,traces}
       metrics: true
-      logs: false
-      traces: false
+      logs: true
+      traces: true
