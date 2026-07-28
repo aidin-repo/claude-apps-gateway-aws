@@ -161,6 +161,16 @@ log "Appending client cert + key"
   printf '</key>\n'
 } >> "$OUT"
 
+# Clamp the in-tunnel TCP MSS. The endpoint pushes tun-mtu 1500, but some networks (corporate
+# offices/hotel Wi-Fi behind inspection or extra encapsulation) have a lower effective path MTU and
+# silently drop the oversized fragments without returning ICMP "fragmentation needed". The tunnel
+# then connects and small packets flow, but the first large packet -- the TLS ClientHello to the
+# gateway -- vanishes, which looks exactly like "the VPN is up but nothing works".
+# mssfix makes OpenVPN advertise a smaller MSS so TCP segments always fit. 'mssfix' is on the AWS
+# VPN Client's allowlist of accepted profile directives, so it survives profile import.
+log "Appending mssfix (path-MTU mitigation)"
+printf 'mssfix %s\n' "${OVPN_MSSFIX:-1260}" >> "$OUT"
+
 # The profile embeds a private key — restrict to the owner.
 chmod 600 "$OUT"
 

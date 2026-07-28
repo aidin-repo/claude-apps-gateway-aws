@@ -259,6 +259,15 @@ security delete-generic-password -s "Claude Code-credentials" 2>/dev/null || tru
 claude          # then /login inside the TUI
 ```
 
+**The VPN says connected, but nothing reaches the gateway (common on office networks).** `dig` returns private IPs and even a bare TCP check on 443 succeeds, yet `curl https://<gateway-host>/healthz` hangs and times out right after the TLS "Client hello". That's a path-MTU black hole, not auth or a security group: the endpoint pushes `tun-mtu 1500`, but the network's real path MTU is lower and it drops the oversized fragments without returning ICMP "fragmentation needed". Small packets flow, the first big one dies. Confirm it in seconds by lowering the tunnel MTU and retrying:
+
+```bash
+sudo ifconfig utun4 mtu 1300     # use the utun with a 10.100.0.x address
+curl -sk https://<gateway-host>/healthz
+```
+
+If that fixes it, the durable fix is already in the generated profile: `vpn-setup.sh` appends `mssfix 1260`, which makes OpenVPN advertise a smaller TCP MSS so segments always fit. Override the value with `OVPN_MSSFIX=<n> bash vpn-setup.sh` if your network needs it lower. Note that `mssfix` only takes effect on a profile the AWS VPN Client has (re)imported, so a profile imported before this change must be re-imported (or add the one line to `~/.config/AWSVPNClient/OpenVpnConfigs/<profile>` and reconnect). The `ifconfig` change is per-connection and resets on every reconnect, so don't rely on it.
+
 **ECS rollout stuck, or the task never goes healthy.** Start with `aws logs tail /ecs/<NAME_PREFIX> --since 10m`. The usual suspects: the OIDC discovery URL isn't reachable from the VPC (add a NAT or VPC endpoint, or check security-group egress); the config template referenced a variable you never added to the envsubst allowlist in `deploy.sh` (the post-render check should have caught it, so read the deploy output); or the image URI points at an ECR tag that no longer exists.
 
 **Your next deploy fails with "already scheduled for deletion".** A previous teardown left one of the four `<NAME_PREFIX>/*` secrets inside its 30-day recovery window. `deploy.sh preflight` names the offending secret, and `aws secretsmanager restore-secret --secret-id <name>` clears it.
