@@ -80,6 +80,15 @@ managed:
     - match: {}                     # catch-all: everyone, since no group-specific rules are set
       cli:
         availableModels: [claude-opus-5, claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-haiku-4-5]
+        # Lets Claude Desktop pass this gateway's policy down to the Claude Code sessions it
+        # launches. Only the HIGHEST-priority managed source's value of this key is read, and
+        # gateway-delivered settings outrank both MDM and managed-settings.json -- so on a
+        # gateway-signed-in machine it must be set HERE to take effect. Keep it mirrored in the
+        # on-disk managed-settings.json as well, for machines that never connect to the gateway.
+        # NOTE: merge alone is not tighten-only. Parent-supplied allow-direction settings
+        # (permission allow rules, sandbox allowlists) still apply until the five allowManaged*Only
+        # locks are set. See README for why they are not enabled here yet.
+        parentSettingsBehavior: merge
         # `cli` is a full managed-settings.json document, so permission mode nests under
         # `permissions.defaultMode` (same as local settings.json).
         permissions:
@@ -100,6 +109,21 @@ managed:
           OTEL_LOG_ASSISTANT_RESPONSES: "1"
           OTEL_LOG_TOOL_DETAILS: "1"
           OTEL_LOG_TOOL_CONTENT: "1"
+      # Claude Desktop overlay, a sibling of `cli` (it holds the Desktop feature gates that have no
+      # CLI equivalent). The PRESENCE of this block is what matters most: without it the gateway
+      # 404s /user/bootstrap for every user, so Desktop still signs in and runs inference but
+      # receives no managed policy at all. With it, /user/bootstrap serves the config the gateway
+      # derives from this policy: the model list (from cli.availableModels), disabled tools (from
+      # bare tool-name permissions.deny entries), the egress allowlist (from
+      # sandbox.network.allowedDomains), and an OTLP endpoint pointing back at the gateway.
+      # Every key below is optional and Desktop applies its own default for anything omitted;
+      # unknown keys fail boot. Keys with no Desktop equivalent (hooks, scoped permission rules
+      # like Bash(npm *)) are dropped from the bootstrap response automatically.
+      desktop:
+        # Let Desktop fetch /v1/models for its picker so it sees this gateway's curated catalog
+        # (including models added under `models:` above). Set false to rely solely on the
+        # availableModels list delivered in the bootstrap response.
+        modelDiscoveryEnabled: true
 
 # Example group-scoped policy (uncomment and set groups to your IdP group names to restrict a
 # subset of users to fewer models / denied tools):
