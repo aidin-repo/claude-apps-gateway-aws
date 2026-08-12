@@ -8,7 +8,7 @@ FROM public.ecr.aws/docker/library/debian:bookworm-slim
 
 # Pin every network-fetched dependency. Every developer machine's `claude`
 # must be on CLAUDE_VERSION or later for gateway support (>= 2.1.195).
-ARG CLAUDE_VERSION=2.1.201
+ARG CLAUDE_VERSION=2.1.228
 ARG AWSCLI_VERSION=2.17.0
 
 RUN apt-get update \
