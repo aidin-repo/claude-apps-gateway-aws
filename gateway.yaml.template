@@ -70,6 +70,10 @@ models:
     label: Claude Fable 5
     upstream_model:
       bedrock: us.anthropic.claude-fable-5
+  - id: claude-fable-5-1
+    label: Claude Fable 5.1
+    upstream_model:
+      bedrock: us.anthropic.claude-fable-5-1
 
 # Per-group access control (RBAC). The `groups` OIDC scope above is requested specifically so
 # these match. availableModels is enforced server-side (a denied model returns 400) AND is what
@@ -79,7 +83,7 @@ managed:
   policies:
     - match: {}                     # catch-all: everyone, since no group-specific rules are set
       cli:
-        availableModels: [claude-opus-5, claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-haiku-4-5]
+        availableModels: [claude-opus-5, claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-fable-5-1, claude-haiku-4-5]
         # Lets Claude Desktop pass this gateway's policy down to the Claude Code sessions it
         # launches. Only the HIGHEST-priority managed source's value of this key is read, and
         # gateway-delivered settings outrank both MDM and managed-settings.json -- so on a
@@ -124,6 +128,16 @@ managed:
         # (including models added under `models:` above). Set false to rely solely on the
         # availableModels list delivered in the bootstrap response.
         modelDiscoveryEnabled: true
+        # Chat is OFF by default in 3P mode: without this key Desktop shows only Cowork and Code,
+        # and the sidebar reads "Cowork" instead of "Home". Turning it on adds the conversational
+        # surface (quick questions, drafting) alongside Cowork, selectable in the message box.
+        # Chat runs with a deliberately small tool surface (web search/fetch, attached files,
+        # project memory read-only, its own scratch dir) and cannot touch the filesystem, run
+        # host code, or escalate into an agentic session.
+        # Also the surface where MCP Apps widgets (interactive iframes returned by connectors)
+        # render; Cowork does not appear to render them.
+        # Requires Claude Code >= 2.1.227 on the gateway server (Dockerfile pins 2.1.228).
+        chatTabEnabled: true
 
 # Example group-scoped policy (uncomment and set groups to your IdP group names to restrict a
 # subset of users to fewer models / denied tools):
@@ -136,7 +150,7 @@ managed:
 #         permissions: { deny: ["WebFetch", "WebSearch"] }
 #     - match: {}
 #       cli:
-#         availableModels: [claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-haiku-4-5]
+#         availableModels: [claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-fable-5-1, claude-haiku-4-5]
 
 # Telemetry: relay each signed-in client's OTLP metrics to the ADOT collector sidecar in the same
 # Fargate task, which exports to CloudWatch OTLP-native (PromQL-queryable). These metrics feed the

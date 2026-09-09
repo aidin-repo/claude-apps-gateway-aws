@@ -204,6 +204,23 @@ With the VPN up, it's `claude` → `/login` → finish SSO in the browser. A hea
 {"evt":"inference","path":"/v1/messages","model":"claude-opus-4-7","upstream":"bedrock","status":200,"ms":3681}
 ```
 
+### Switching models
+
+The `/model` picker (or `claude --model <id>`) only ever shows the short catalog ids defined in `gateway.yaml.template`'s `models:` block and allowed by the matching `managed.policies[].cli.availableModels` entry, not the raw Bedrock model/inference-profile id. For example, to use Claude Fable 5.1:
+
+```bash
+claude --model claude-fable-5-1                                        # start a new session on Fable 5.1
+claude --model claude-fable-5-1 --resume <session-id>                  # resume an existing session on Fable 5.1
+```
+
+Or from inside a running session:
+
+```
+/model claude-fable-5-1
+```
+
+`/model` with no argument opens the interactive picker with every id from `availableModels` for your group. A model that's only listed under `models:` but missing from `availableModels` is routable but won't appear in the picker (see **Living with it: day-2 operations** below to add one).
+
 ## Living with it: day-2 operations
 
 **Changing config** (models, access rules, spend caps, telemetry) is a two-minute loop: edit `gateway.yaml.template`, then `bash deploy.sh app`. Because model access and per-group policy are enforced *server-side*, a client can't sneak in a model you haven't allowed. Here's a policy that keeps contractors on Haiku and blocks web tools for them:
