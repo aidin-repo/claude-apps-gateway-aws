@@ -1,0 +1,211 @@
+<mxfile host="app.diagrams.net" modified="2026-09-23T17:35:00.000Z" agent="Kiro Crew" version="24.7.17">
+  <diagram id="claude-apps-gateway" name="Architecture">
+    <mxGraphModel dx="2400" dy="1200" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2400" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="title-group" connectable="0" style="group;fontFamily=Helvetica;" value="" vertex="1" parent="1">
+          <mxGeometry height="83" width="2220" x="50" y="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="title-text" style="text;html=1;resizable=1;points=[];autosize=1;align=left;verticalAlign=top;spacingTop=-4;fontSize=30;fontStyle=1;fontFamily=Helvetica;" value="Claude Apps Gateway on AWS" vertex="1" parent="title-group">
+          <mxGeometry height="42" width="1000" as="geometry"/>
+        </mxCell>
+        <mxCell id="subtitle-text" style="text;html=1;resizable=0;points=[];autosize=1;align=left;verticalAlign=top;spacingTop=-4;fontSize=16;fontFamily=Helvetica;" value="Private Claude Code access to Amazon Bedrock with corporate SSO, server-side policy, spend controls, and OpenTelemetry" vertex="1" parent="title-group">
+          <mxGeometry height="25" width="1450" x="5" y="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="title-separator" style="line;strokeWidth=2;html=1;fontSize=14;strokeColor=#FF9900;fontFamily=Helvetica;" value="" vertex="1" parent="title-group">
+          <mxGeometry height="10" width="2210" x="5" y="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="developer-container" style="fillColor=#F5F5F5;strokeColor=light-dark(#666666,#D4D4D4);rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#333333;fontFamily=Helvetica;container=1;pointerEvents=0;collapsible=0;shadow=1;strokeWidth=1.5;" value="Developer laptop" vertex="1" parent="1">
+          <mxGeometry x="50" y="250" width="130" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="developer-icon" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#232F3D;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.generic_application;fontFamily=Helvetica;" value="" vertex="1" parent="developer-container">
+          <mxGeometry x="41" y="30" width="48" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="developer-detail" style="text;html=1;align=center;verticalAlign=middle;fontSize=10;fontColor=#333333;fontFamily=Helvetica;" value="Claude Code CLI&lt;br&gt;Browser + AWS VPN Client" vertex="1" parent="developer-container">
+          <mxGeometry x="10" y="82" width="110" height="38" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="oidc-group" style="fillColor=#FFEBEE;strokeColor=#DD344C;rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#DD344C;fontFamily=Helvetica;container=1;pointerEvents=0;collapsible=0;shadow=1;strokeWidth=1.5;" value="Corporate identity" vertex="1" parent="1">
+          <mxGeometry x="50" y="580" width="130" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="oidc-icon" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#DD344C;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.generic_application;fontFamily=Helvetica;shadow=1;" value="OIDC IdP&lt;div&gt;&lt;i&gt;Okta, Entra, Auth0&lt;/i&gt;&lt;/div&gt;" vertex="1" parent="oidc-group">
+          <mxGeometry x="41" y="30" width="48" height="48" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="aws-cloud" style="points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0]];outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=light-dark(#232F3E0D,#232F3E0D);strokeColor=#232F3E;dashed=0;verticalLabelPosition=top;verticalAlign=bottom;align=left;spacingLeft=10;html=1;fontSize=14;fontStyle=1;shape=mxgraph.aws4.group_aws_cloud;container=1;pointerEvents=0;collapsible=0;fontFamily=Helvetica;fillStyle=auto;" value="AWS account" vertex="1" parent="1">
+          <mxGeometry x="260" y="150" width="1280" height="920" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="vpc-group" style="points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0]];outlineConnect=0;fontColor=#8C4FFF;gradientColor=none;fillColor=light-dark(#8C4FFF0D,#8C4FFF0D);strokeColor=#8C4FFF;dashed=0;verticalLabelPosition=top;verticalAlign=bottom;align=left;spacingLeft=10;html=1;fontSize=14;fontStyle=1;shape=mxgraph.aws4.group_vpc2;container=1;pointerEvents=0;collapsible=0;fontFamily=Helvetica;fillStyle=auto;" value="VPC · two Availability Zones" vertex="1" parent="aws-cloud">
+          <mxGeometry x="40" y="90" width="880" height="500" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="cvpn-group" style="fillColor=#EDE7F6;strokeColor=#8C4FFF;rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#8C4FFF;fontFamily=Helvetica;container=1;pointerEvents=0;collapsible=0;shadow=1;strokeWidth=1.5;" value="Network access" vertex="1" parent="vpc-group">
+          <mxGeometry x="40" y="150" width="120" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="cvpn-icon" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#8C4FFF;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.client_vpn;fontFamily=Helvetica;shadow=1;" value="AWS Client VPN&lt;div&gt;&lt;i&gt;mutual TLS&lt;/i&gt;&lt;/div&gt;" vertex="1" parent="cvpn-group">
+          <mxGeometry x="36" y="30" width="48" height="48" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="alb-group" style="fillColor=#EDE7F6;strokeColor=#8C4FFF;rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#8C4FFF;fontFamily=Helvetica;container=1;pointerEvents=0;collapsible=0;shadow=1;strokeWidth=1.5;" value="Private ingress" vertex="1" parent="vpc-group">
+          <mxGeometry x="250" y="150" width="120" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="alb-icon" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#8C4FFF;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.elastic_load_balancing;fontFamily=Helvetica;shadow=1;" value="Application Load Balancer&lt;div&gt;&lt;i&gt;internal · HTTPS 443&lt;/i&gt;&lt;/div&gt;" vertex="1" parent="alb-group">
+          <mxGeometry x="36" y="30" width="48" height="48" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="fargate-group" style="fillColor=#FFF2E8;strokeColor=#ED7100;rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#ED7100;fontFamily=Helvetica;container=1;pointerEvents=0;collapsible=0;shadow=1;strokeWidth=1.5;" value="Gateway runtime" vertex="1" parent="vpc-group">
+          <mxGeometry x="480" y="150" width="120" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="fargate-icon" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#ED7100;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.fargate;fontFamily=Helvetica;shadow=1;" value="Amazon ECS on Fargate&lt;div&gt;&lt;i&gt;Claude apps gateway :8080&lt;/i&gt;&lt;/div&gt;" vertex="1" parent="fargate-group">
+          <mxGeometry x="36" y="30" width="48" height="48" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="adot-group" style="fillColor=#F5F5F5;strokeColor=#666666;rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#666666;fontFamily=Helvetica;container=1;pointerEvents=0;collapsible=0;shadow=1;strokeWidth=1.5;" value="Telemetry sidecar" vertex="1" parent="vpc-group">
+          <mxGeometry x="710" y="150" width="120" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="adot-icon" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#666666;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.distro_for_opentelemetry;fontFamily=Helvetica;shadow=1;" value="AWS Distro for OpenTelemetry&lt;div&gt;&lt;i&gt;OTLP/HTTP :4318&lt;/i&gt;&lt;/div&gt;" vertex="1" parent="adot-group">
+          <mxGeometry x="36" y="30" width="48" height="48" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="rds-group" style="fillColor=#F5E6F7;strokeColor=#C925D1;rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#C925D1;fontFamily=Helvetica;container=1;pointerEvents=0;collapsible=0;shadow=1;strokeWidth=1.5;" value="Session state" vertex="1" parent="vpc-group">
+          <mxGeometry x="480" y="350" width="120" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="rds-icon" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#C925D1;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.rds;fontFamily=Helvetica;shadow=1;" value="Amazon RDS for PostgreSQL 16&lt;div&gt;&lt;i&gt;sessions + spend counters&lt;/i&gt;&lt;/div&gt;" vertex="1" parent="rds-group">
+          <mxGeometry x="36" y="30" width="48" height="48" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="route53-group" style="fillColor=#EDE7F6;strokeColor=#8C4FFF;rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#8C4FFF;fontFamily=Helvetica;container=1;pointerEvents=0;collapsible=0;shadow=1;strokeWidth=1.5;" value="Private DNS" vertex="1" parent="aws-cloud">
+          <mxGeometry x="40" y="700" width="120" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="route53-icon" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#8C4FFF;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.route_53;fontFamily=Helvetica;shadow=1;" value="Amazon Route 53&lt;div&gt;&lt;i&gt;private hosted zone&lt;/i&gt;&lt;/div&gt;" vertex="1" parent="route53-group">
+          <mxGeometry x="36" y="30" width="48" height="48" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="acm-group" style="fillColor=#FFEBEE;strokeColor=#DD344C;rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#DD344C;fontFamily=Helvetica;container=1;pointerEvents=0;collapsible=0;shadow=1;strokeWidth=1.5;" value="TLS certificate" vertex="1" parent="aws-cloud">
+          <mxGeometry x="220" y="700" width="120" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="acm-icon" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#DD344C;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.certificate_manager_3;fontFamily=Helvetica;shadow=1;" value="AWS Certificate Manager&lt;div&gt;&lt;i&gt;HTTPS certificate&lt;/i&gt;&lt;/div&gt;" vertex="1" parent="acm-group">
+          <mxGeometry x="36" y="30" width="48" height="48" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="s3-group" style="fillColor=#E8F5E9;strokeColor=#3F8624;rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#3F8624;fontFamily=Helvetica;container=1;pointerEvents=0;collapsible=0;shadow=1;strokeWidth=1.5;" value="Configuration" vertex="1" parent="aws-cloud">
+          <mxGeometry x="400" y="700" width="120" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="s3-icon" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#3F8624;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;fontFamily=Helvetica;shadow=1;" value="Amazon S3&lt;div&gt;&lt;i&gt;versioned gateway.yaml&lt;/i&gt;&lt;/div&gt;" vertex="1" parent="s3-group">
+          <mxGeometry x="36" y="30" width="48" height="48" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="secrets-group" style="fillColor=#FFEBEE;strokeColor=#DD344C;rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#DD344C;fontFamily=Helvetica;container=1;pointerEvents=0;collapsible=0;shadow=1;strokeWidth=1.5;" value="Runtime secrets" vertex="1" parent="aws-cloud">
+          <mxGeometry x="580" y="700" width="120" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="secrets-icon" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#DD344C;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.secrets_manager;fontFamily=Helvetica;shadow=1;" value="AWS Secrets Manager&lt;div&gt;&lt;i&gt;JWT · DB · OIDC · admin&lt;/i&gt;&lt;/div&gt;" vertex="1" parent="secrets-group">
+          <mxGeometry x="36" y="30" width="48" height="48" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="bedrock-group" style="fillColor=#E0F2F1;strokeColor=#01A88D;rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#01A88D;fontFamily=Helvetica;container=1;pointerEvents=0;collapsible=0;shadow=1;strokeWidth=1.5;" value="Model inference" vertex="1" parent="aws-cloud">
+          <mxGeometry x="760" y="700" width="120" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="bedrock-icon" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#01A88D;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;fontFamily=Helvetica;shadow=1;" value="Amazon Bedrock&lt;div&gt;&lt;i&gt;Claude inference profiles&lt;/i&gt;&lt;/div&gt;" vertex="1" parent="bedrock-group">
+          <mxGeometry x="36" y="30" width="48" height="48" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="auxiliary-group" style="fillColor=none;strokeColor=#666666;dashed=1;rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#666666;fontFamily=Helvetica;container=1;pointerEvents=0;collapsible=0;strokeWidth=1.5;" value="Auxiliary services" vertex="1" parent="aws-cloud">
+          <mxGeometry x="980" y="100" width="250" height="700" as="geometry"/>
+        </mxCell>
+        <mxCell id="cloudwatch-group" style="fillColor=#F5F5F5;strokeColor=#666666;rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#666666;fontFamily=Helvetica;container=1;pointerEvents=0;collapsible=0;shadow=1;strokeWidth=1.5;" value="Metrics and events" vertex="1" parent="auxiliary-group">
+          <mxGeometry x="65" y="110" width="120" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="cloudwatch-icon" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#666666;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudwatch_2;fontFamily=Helvetica;shadow=1;" value="Amazon CloudWatch&lt;div&gt;&lt;i&gt;Coding Agent Insights + logs&lt;/i&gt;&lt;/div&gt;" vertex="1" parent="cloudwatch-group">
+          <mxGeometry x="36" y="30" width="48" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="xray-group" style="fillColor=#F5F5F5;strokeColor=#666666;rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#666666;fontFamily=Helvetica;container=1;pointerEvents=0;collapsible=0;shadow=1;strokeWidth=1.5;" value="Distributed traces" vertex="1" parent="auxiliary-group">
+          <mxGeometry x="65" y="360" width="120" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="xray-icon" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#666666;strokeColor=#FFFFFF;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.xray;fontFamily=Helvetica;shadow=1;" value="AWS X-Ray&lt;div&gt;&lt;i&gt;per-turn traces&lt;/i&gt;&lt;/div&gt;" vertex="1" parent="xray-group">
+          <mxGeometry x="36" y="30" width="48" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="auxiliary-note" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=11;fontColor=#666666;fontFamily=Helvetica;" value="ADOT exports all three signals&lt;br&gt;with SigV4 using the ECS task role" vertex="1" parent="auxiliary-group">
+          <mxGeometry x="25" y="540" width="200" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="edge-user-vpn" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#545B64;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontFamily=Helvetica;" edge="1" parent="1" source="developer-container" target="cvpn-group">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-vpn-alb" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#545B64;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontFamily=Helvetica;" edge="1" parent="1" source="cvpn-group" target="alb-group">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-alb-gateway" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#545B64;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontFamily=Helvetica;" edge="1" parent="1" source="alb-group" target="fargate-group">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-gateway-rds" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#545B64;exitX=0.45;exitY=1;entryX=0.45;entryY=0;fontFamily=Helvetica;" edge="1" parent="1" source="fargate-group" target="rds-group">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-gateway-adot" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#545B64;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontFamily=Helvetica;" edge="1" parent="1" source="fargate-group" target="adot-group">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-gateway-bedrock" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#545B64;exitX=0.85;exitY=1;entryX=0.5;entryY=0;fontFamily=Helvetica;" edge="1" parent="1" source="fargate-group" target="bedrock-group">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="960" y="560"/><mxPoint x="1080" y="560"/><mxPoint x="1080" y="850"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-gateway-oidc" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;startArrow=block;startFill=1;endFill=1;strokeWidth=2;strokeColor=#545B64;exitX=0;exitY=1;entryX=1;entryY=0.5;fontFamily=Helvetica;" edge="1" parent="1" source="fargate-group" target="oidc-group">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="730" y="540"/><mxPoint x="220" y="540"/><mxPoint x="220" y="645"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-route53-alb" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=open;endFill=0;strokeWidth=1.5;strokeColor=#8C4FFF;dashed=1;exitX=0.5;exitY=0;entryX=0.25;entryY=1;fontFamily=Helvetica;" edge="1" parent="1" source="route53-group" target="alb-group">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="360" y="790"/><mxPoint x="540" y="790"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="edge-acm-alb" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=open;endFill=0;strokeWidth=1.5;strokeColor=#DD344C;dashed=1;exitX=0.5;exitY=0;entryX=0.75;entryY=1;fontFamily=Helvetica;" edge="1" parent="1" source="acm-group" target="alb-group">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="540" y="760"/><mxPoint x="630" y="760"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="edge-s3-gateway" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=open;endFill=0;strokeWidth=1.5;strokeColor=#3F8624;dashed=1;exitX=0.5;exitY=0;entryX=0;entryY=0.5;fontFamily=Helvetica;" edge="1" parent="1" source="s3-group" target="fargate-group">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="720" y="600"/><mxPoint x="760" y="600"/><mxPoint x="760" y="450"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="edge-secrets-gateway" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=open;endFill=0;strokeWidth=1.5;strokeColor=#DD344C;dashed=1;exitX=0.5;exitY=0;entryX=1;entryY=0.65;fontFamily=Helvetica;" edge="1" parent="1" source="secrets-group" target="fargate-group">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="930" y="650"/><mxPoint x="930" y="470"/></Array></mxGeometry>
+        </mxCell>
+
+        <mxCell id="step-1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=16;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;align=center;verticalAlign=middle;labelBackgroundColor=none;" value="1" vertex="1" parent="1"><mxGeometry x="190" y="280" width="28" height="28" as="geometry"/></mxCell>
+        <mxCell id="step-2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=16;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;align=center;verticalAlign=middle;labelBackgroundColor=none;" value="2" vertex="1" parent="1"><mxGeometry x="520" y="785" width="28" height="28" as="geometry"/></mxCell>
+        <mxCell id="step-3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=16;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;align=center;verticalAlign=middle;labelBackgroundColor=none;" value="3" vertex="1" parent="1"><mxGeometry x="195" y="610" width="28" height="28" as="geometry"/></mxCell>
+        <mxCell id="step-4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=16;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;align=center;verticalAlign=middle;labelBackgroundColor=none;" value="4" vertex="1" parent="1"><mxGeometry x="680" y="280" width="28" height="28" as="geometry"/></mxCell>
+        <mxCell id="step-5" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=16;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;align=center;verticalAlign=middle;labelBackgroundColor=none;" value="5" vertex="1" parent="1"><mxGeometry x="920" y="555" width="28" height="28" as="geometry"/></mxCell>
+        <mxCell id="step-6" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=16;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;align=center;verticalAlign=middle;labelBackgroundColor=none;" value="6" vertex="1" parent="1"><mxGeometry x="1050" y="760" width="28" height="28" as="geometry"/></mxCell>
+        <mxCell id="step-7" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=16;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;align=center;verticalAlign=middle;labelBackgroundColor=none;" value="7" vertex="1" parent="1"><mxGeometry x="1190" y="290" width="28" height="28" as="geometry"/></mxCell>
+
+        <mxCell id="legend-bg" style="verticalLabelPosition=bottom;verticalAlign=top;html=1;shape=mxgraph.basic.rect;fillColor2=none;strokeWidth=1;size=20;indent=5;fillColor=light-dark(#EDF3FF,#305363);strokeColor=#6C8EBF;fontFamily=Helvetica;" value="" vertex="1" parent="1">
+          <mxGeometry height="920" width="650" x="1600" y="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend-title" style="text;html=1;align=left;verticalAlign=top;fontSize=20;fontStyle=1;fontFamily=Helvetica;fontColor=light-dark(#232F3E,#FFFFFF);" value="Request and operations flow" vertex="1" parent="1">
+          <mxGeometry x="1630" y="180" width="570" height="32" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="legend-step-1-badge" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=22;labelBackgroundColor=none;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;" value="1" vertex="1" parent="1"><mxGeometry x="1630" y="235" width="40" height="38" as="geometry"/></mxCell>
+        <mxCell id="legend-step-1-text" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontFamily=Helvetica;fontColor=light-dark(#000000,#FFFFFF);" value="&lt;b&gt;Connect privately&lt;/b&gt;&lt;br&gt;The AWS VPN Client establishes a mutual-TLS tunnel to AWS Client VPN." vertex="1" parent="1"><mxGeometry x="1685" y="230" width="530" height="75" as="geometry"/></mxCell>
+
+        <mxCell id="legend-step-2-badge" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=22;labelBackgroundColor=none;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;" value="2" vertex="1" parent="1"><mxGeometry x="1630" y="345" width="40" height="38" as="geometry"/></mxCell>
+        <mxCell id="legend-step-2-text" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontFamily=Helvetica;fontColor=light-dark(#000000,#FFFFFF);" value="&lt;b&gt;Resolve and secure the gateway&lt;/b&gt;&lt;br&gt;Route 53 resolves a private ALB alias; ACM terminates TLS on HTTPS 443." vertex="1" parent="1"><mxGeometry x="1685" y="340" width="530" height="75" as="geometry"/></mxCell>
+
+        <mxCell id="legend-step-3-badge" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=22;labelBackgroundColor=none;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;" value="3" vertex="1" parent="1"><mxGeometry x="1630" y="455" width="40" height="38" as="geometry"/></mxCell>
+        <mxCell id="legend-step-3-text" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontFamily=Helvetica;fontColor=light-dark(#000000,#FFFFFF);" value="&lt;b&gt;Authenticate with corporate SSO&lt;/b&gt;&lt;br&gt;The browser and gateway complete OIDC authorization; the gateway mints a short-lived session." vertex="1" parent="1"><mxGeometry x="1685" y="450" width="530" height="80" as="geometry"/></mxCell>
+
+        <mxCell id="legend-step-4-badge" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=22;labelBackgroundColor=none;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;" value="4" vertex="1" parent="1"><mxGeometry x="1630" y="575" width="40" height="38" as="geometry"/></mxCell>
+        <mxCell id="legend-step-4-text" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontFamily=Helvetica;fontColor=light-dark(#000000,#FFFFFF);" value="&lt;b&gt;Apply gateway policy&lt;/b&gt;&lt;br&gt;The ALB routes requests to Fargate. The gateway enforces model access and spend limits." vertex="1" parent="1"><mxGeometry x="1685" y="570" width="530" height="75" as="geometry"/></mxCell>
+
+        <mxCell id="legend-step-5-badge" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=22;labelBackgroundColor=none;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;" value="5" vertex="1" parent="1"><mxGeometry x="1630" y="685" width="40" height="38" as="geometry"/></mxCell>
+        <mxCell id="legend-step-5-text" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontFamily=Helvetica;fontColor=light-dark(#000000,#FFFFFF);" value="&lt;b&gt;Load configuration and state&lt;/b&gt;&lt;br&gt;Fargate reads versioned S3 configuration and injected secrets, then stores sessions and spend in RDS." vertex="1" parent="1"><mxGeometry x="1685" y="680" width="530" height="85" as="geometry"/></mxCell>
+
+        <mxCell id="legend-step-6-badge" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=22;labelBackgroundColor=none;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;" value="6" vertex="1" parent="1"><mxGeometry x="1630" y="810" width="40" height="38" as="geometry"/></mxCell>
+        <mxCell id="legend-step-6-text" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontFamily=Helvetica;fontColor=light-dark(#000000,#FFFFFF);" value="&lt;b&gt;Invoke Claude on Amazon Bedrock&lt;/b&gt;&lt;br&gt;The ECS task role signs requests to the configured Claude inference profile; no AWS credential reaches the laptop." vertex="1" parent="1"><mxGeometry x="1685" y="805" width="530" height="85" as="geometry"/></mxCell>
+
+        <mxCell id="legend-step-7-badge" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=22;labelBackgroundColor=none;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;" value="7" vertex="1" parent="1"><mxGeometry x="1630" y="935" width="40" height="38" as="geometry"/></mxCell>
+        <mxCell id="legend-step-7-text" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontFamily=Helvetica;fontColor=light-dark(#000000,#FFFFFF);" value="&lt;b&gt;Export telemetry&lt;/b&gt;&lt;br&gt;The gateway relays OTLP over loopback. ADOT exports metrics, identity-stamped events, and traces with SigV4." vertex="1" parent="1"><mxGeometry x="1685" y="930" width="530" height="85" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
