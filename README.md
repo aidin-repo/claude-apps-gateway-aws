@@ -29,43 +29,9 @@ Once you accept that, the rest of the shape is forced: the load balancer has to 
 
 ## How it fits together
 
-```mermaid
-graph TD
-    subgraph Laptop["Developer laptop"]
-        CLI["Claude Code CLI (>=2.1.195)<br/>managed-settings: forceLoginMethod=gateway"]
-        VPNC["AWS VPN Client (client.ovpn)"]
-        BR["Browser (SSO sign-in)"]
-    end
-    subgraph IdP["OIDC IdP"]
-        OIDC["login.example.com"]
-    end
-    subgraph VPC["Your VPC"]
-        VPNE["Client VPN endpoint<br/>udp/443, split-tunnel, mutual cert"]
-        ALB["Internal ALB (IPv4)<br/>HTTPS 443, wildcard cert"]
-        FARGATE["ECS Fargate task<br/>claude gateway :8080<br/>task role -> Bedrock"]
-        OTEL["ADOT collector sidecar<br/>OTLP :4318"]
-        RDS["RDS Postgres 16"]
-    end
-    subgraph AWSsvc["AWS services"]
-        S3C["S3 config bucket<br/>gateway.yaml"]
-        SM["Secrets Manager"]
-        CWM["CloudWatch metrics -> Coding Agent Insights<br/>CloudWatch Logs (events)<br/>X-Ray (traces)"]
-        BED["Amazon Bedrock"]
-    end
-    CLI --> VPNC
-    VPNC -->|encrypted tunnel| VPNE
-    VPNE --> ALB
-    CLI -->|/login + /v1/messages + OTLP| ALB
-    ALB --> FARGATE
-    FARGATE --> OIDC
-    FARGATE --> RDS
-    FARGATE -->|InvokeModel| BED
-    FARGATE --> S3C
-    FARGATE --> SM
-    FARGATE --> OTEL
-    OTEL --> CWM
-    BR -->|sign in| OIDC
-```
+[![Claude Apps Gateway AWS architecture and request flow](docs/claude-apps-gateway-architecture.png)](docs/claude-apps-gateway-architecture.drawio)
+
+> **Editable source:** Open [`docs/claude-apps-gateway-architecture.drawio`](docs/claude-apps-gateway-architecture.drawio) in draw.io. The PNG above is generated from that file.
 
 Following a single request makes the diagram concrete. A developer connects the VPN, runs `claude`, and signs in. The CLI opens their browser to your identity provider for SSO; the gateway validates that OIDC login and mints a short-lived bearer token. From then on every `claude` request travels laptop → VPN → internal ALB → gateway. The gateway checks the token, applies your model and spend-cap policy, and only then calls Bedrock using the *gateway's* IAM role. The credential never leaves the gateway; the laptop only ever holds a temporary token.
 
