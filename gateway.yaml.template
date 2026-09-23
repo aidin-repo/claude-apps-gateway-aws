@@ -58,6 +58,10 @@ admin:
 # pinned binary are not in that catalog, so add them explicitly below.
 auto_include_builtin_models: true
 models:
+  - id: claude-opus-5-5
+    label: Claude Opus 5.5
+    upstream_model:
+      bedrock: us.anthropic.claude-opus-5-5
   - id: claude-opus-5
     label: Claude Opus 5
     upstream_model:
@@ -83,7 +87,7 @@ managed:
   policies:
     - match: {}                     # catch-all: everyone, since no group-specific rules are set
       cli:
-        availableModels: [claude-opus-5, claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-fable-5-1, claude-haiku-4-5]
+        availableModels: [claude-opus-5-5, claude-opus-5, claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-fable-5-1, claude-haiku-4-5]
         # Lets Claude Desktop pass this gateway's policy down to the Claude Code sessions it
         # launches. Only the HIGHEST-priority managed source's value of this key is read, and
         # gateway-delivered settings outrank both MDM and managed-settings.json -- so on a
