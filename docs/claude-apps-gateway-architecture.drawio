@@ -170,6 +170,18 @@
           <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="930" y="650"/><mxPoint x="930" y="470"/></Array></mxGeometry>
         </mxCell>
 
+        <mxCell id="edge-browser-oidc" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;startArrow=block;startFill=1;endFill=1;strokeWidth=2;strokeColor=#DD344C;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontFamily=Helvetica;" edge="1" parent="1" source="developer-container" target="oidc-group">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-adot-cloudwatch" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#666666;exitX=1;exitY=0.35;entryX=0;entryY=0.5;fontFamily=Helvetica;" edge="1" parent="1" source="adot-group" target="cloudwatch-group">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-adot-xray" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#666666;exitX=1;exitY=0.75;entryX=0;entryY=0.5;fontFamily=Helvetica;" edge="1" parent="1" source="adot-group" target="xray-group">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="1170" y="480"/><mxPoint x="1170" y="670"/></Array>
+          </mxGeometry>
+        </mxCell>
+
         <mxCell id="step-1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=16;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;align=center;verticalAlign=middle;labelBackgroundColor=none;" value="1" vertex="1" parent="1"><mxGeometry x="190" y="280" width="28" height="28" as="geometry"/></mxCell>
         <mxCell id="step-2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=16;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;align=center;verticalAlign=middle;labelBackgroundColor=none;" value="2" vertex="1" parent="1"><mxGeometry x="520" y="785" width="28" height="28" as="geometry"/></mxCell>
         <mxCell id="step-3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#007CBD;strokeColor=default;fontColor=#FFFFFF;fontStyle=1;fontSize=16;fontFamily=Helvetica;shadow=1;glass=0;strokeWidth=2;align=center;verticalAlign=middle;labelBackgroundColor=none;" value="3" vertex="1" parent="1"><mxGeometry x="195" y="610" width="28" height="28" as="geometry"/></mxCell>
