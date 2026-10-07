@@ -66,6 +66,10 @@ models:
     label: Claude Opus 5
     upstream_model:
       bedrock: us.anthropic.claude-opus-5
+  - id: claude-sonnet-5-5
+    label: Claude Sonnet 5.5
+    upstream_model:
+      bedrock: us.anthropic.claude-sonnet-5-5
   - id: claude-sonnet-5
     label: Claude Sonnet 5
     upstream_model:
@@ -87,7 +91,7 @@ managed:
   policies:
     - match: {}                     # catch-all: everyone, since no group-specific rules are set
       cli:
-        availableModels: [claude-opus-5-5, claude-opus-5, claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-fable-5-1, claude-haiku-4-5]
+        availableModels: [claude-opus-5-5, claude-opus-5, claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-fable-5, claude-fable-5-1, claude-haiku-4-5]
         # Lets Claude Desktop pass this gateway's policy down to the Claude Code sessions it
         # launches. Only the HIGHEST-priority managed source's value of this key is read, and
         # gateway-delivered settings outrank both MDM and managed-settings.json -- so on a
@@ -97,6 +101,14 @@ managed:
         # (permission allow rules, sandbox allowlists) still apply until the five allowManaged*Only
         # locks are set. See README for why they are not enabled here yet.
         parentSettingsBehavior: merge
+        # Remote MCP servers pushed to every matching Claude Code client (http/sse only, literal
+        # values, no variable references). AWS MCP Server is AWS-managed; each user signs in with OAuth as
+        # themselves, so no credential is stored here. Needs Claude Code >= 2.1.259 on the gateway
+        # image (Dockerfile pins 2.1.280). Users' IAM principal needs the AWS MCP sign-in policy.
+        managedMcpServers:
+          aws-mcp:
+            type: http
+            url: https://aws-mcp.us-east-1.api.aws/mcp
         # `cli` is a full managed-settings.json document, so permission mode nests under
         # `permissions.defaultMode` (same as local settings.json).
         permissions:
@@ -142,6 +154,14 @@ managed:
         # render; Cowork does not appear to render them.
         # Requires Claude Code >= 2.1.227 on the gateway server (Dockerfile pins 2.1.228).
         chatTabEnabled: true
+        # AWS MCP Server for Claude Desktop (Chat/Cowork). Desktop's managedMcpServers is an ARRAY
+        # with a different entry shape than cli.managedMcpServers above (needs `transport`, and
+        # Desktop uses the ?oauth=initialize URL form). oauth: true = dynamic client registration.
+        managedMcpServers:
+          - name: aws-mcp
+            transport: http
+            url: https://aws-mcp.us-east-1.api.aws/mcp?oauth=initialize
+            oauth: true
 
 # Example group-scoped policy (uncomment and set groups to your IdP group names to restrict a
 # subset of users to fewer models / denied tools):
