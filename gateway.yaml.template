@@ -74,6 +74,10 @@ models:
     label: Claude Sonnet 5
     upstream_model:
       bedrock: us.anthropic.claude-sonnet-5
+  - id: claude-haiku-5-5
+    label: Claude Haiku 5.5
+    upstream_model:
+      bedrock: us.anthropic.claude-haiku-5-5
   - id: claude-fable-5
     label: Claude Fable 5
     upstream_model:
@@ -90,8 +94,16 @@ models:
 managed:
   policies:
     - match: {}                     # catch-all: everyone, since no group-specific rules are set
+      # Serve this policy's `cli` block to Claude Code inside Claude Desktop's Code tab; without it
+      # that tab gets a 404 from /managed/settings and runs with no org policy. Sibling of match/
+      # cli/desktop (the key is a boolean on the policy object itself).
+      serve_to_desktop: true
       cli:
-        availableModels: [claude-opus-5-5, claude-opus-5, claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-fable-5, claude-fable-5-1, claude-haiku-4-5]
+        # Sessions that nobody has pointed at a model start on `model`; without these two keys the
+        # built-in default (Opus 4.7) is not in availableModels and every such request gets a 400.
+        enforceAvailableModels: true
+        model: claude-opus-5-5
+        availableModels: [claude-opus-5-5, claude-opus-5, claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-fable-5, claude-fable-5-1, claude-haiku-5-5, claude-haiku-4-5]
         # Lets Claude Desktop pass this gateway's policy down to the Claude Code sessions it
         # launches. Only the HIGHEST-priority managed source's value of this key is read, and
         # gateway-delivered settings outrank both MDM and managed-settings.json -- so on a
