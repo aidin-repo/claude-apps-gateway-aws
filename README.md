@@ -76,7 +76,7 @@ You'll need a few things already in place. This template deliberately doesn't cr
 - An **ACM certificate** covering the gateway hostname. The next section walks through the three ways to get one.
 - **Amazon Bedrock model access** enabled for the Claude models in your region (a one-time console opt-in per model).
 - An **OIDC identity provider** (Okta, Entra, Auth0, Google Workspace, Keycloak, and so on): a confidential web app with a client secret, whose issuer serves `/.well-known/openid-configuration`.
-- **Claude Code v2.1.195+** on both the gateway image and every developer laptop.
+- **Claude Code v2.1.195+** on both the gateway image and every developer laptop. The image pins its own version in the `Dockerfile` (`ARG CLAUDE_VERSION`).
 - Local tools: **aws CLI**, **curl**, **envsubst** (`brew install gettext` / `apt install gettext-base`), and **OpenSSL >= 1.1.1**. Note that macOS ships LibreSSL at `/usr/bin/openssl`, which AWS rejects for cert import, so `brew install openssl` and put it ahead on your PATH.
 
 ## Sorting out a domain and cert
@@ -97,6 +97,33 @@ You'll need a few things already in place. This template deliberately doesn't cr
 4. Put the cert ARN, the private zone id, and `HOSTNAME_FQDN=claude-gateway.internal.mycompany.com` into `deploy.env`.
 
 Path B skips public DNS entirely but costs $400/mo for the Private CA. Path C only makes sense if your org already pushes a corporate root CA through MDM.
+
+## Building and pushing the gateway image
+
+The gateway is the `claude gateway` command in the Claude Code binary, so the image pins a Claude Code version (`ARG CLAUDE_VERSION` in the `Dockerfile`) and the container fetches `gateway.yaml` from S3 at startup. Fixes reach your deployment only when you bump that pin, rebuild, and roll out. Always push a **new tag** (never overwrite an existing one) so rollback is just a parameter change. Create the ECR repository first if it doesn't exist.
+
+**Option 1: local Docker.**
+
+```bash
+ECR_URI=<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/claude-gateway
+TAG=v9
+docker build --platform linux/amd64 -t "$ECR_URI:$TAG" .
+aws ecr get-login-password --region <REGION> | docker login --username AWS --password-stdin "${ECR_URI%/*}"
+docker push "$ECR_URI:$TAG"
+```
+
+**Option 2: CodeBuild, when there is no local Docker.** Use a privileged Linux CodeBuild project with a `NO_SOURCE` source and `buildspec-image.yml` as the buildspec, then pass the files in as base64 overrides:
+
+```bash
+aws codebuild start-build --project-name <PROJECT> \
+  --environment-variables-override \
+    name=ECR_URI,value="$ECR_URI",type=PLAINTEXT \
+    name=TAG,value="$TAG",type=PLAINTEXT \
+    name=DOCKERFILE_B64,value="$(base64 < Dockerfile | tr -d '\n')",type=PLAINTEXT \
+    name=ENTRYPOINT_B64,value="$(base64 < entrypoint.sh | tr -d '\n')",type=PLAINTEXT
+```
+
+Then set `IMAGE_URI=$ECR_URI:$TAG` in `deploy.env`, run `bash deploy.sh preflight` (it checks the tag exists in ECR), and `bash deploy.sh app`. To confirm the version baked into an image: `docker run --rm --entrypoint claude "$ECR_URI:$TAG" --version`. To roll back, set `IMAGE_URI` to the previous tag and rerun `bash deploy.sh app`.
 
 ## Deploying it
 

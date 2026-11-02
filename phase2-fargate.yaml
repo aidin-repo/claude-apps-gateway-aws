@@ -52,7 +52,7 @@ Parameters:
     Description: OIDC confidential-web-app client secret (populates claude-gateway/oidc secret; cannot be REPLACE_ME).
   OtelCollectorTag:
     Type: String
-    Description: Pinned aws-otel-collector image tag (do not use latest in production, e.g. v0.42.0).
+    Description: Pinned aws-otel-collector image tag (do not use latest in production, e.g. v0.51.0).
     AllowedPattern: '^[A-Za-z0-9._-]+$'
   PostgresVersion:
     Type: String
@@ -353,6 +353,12 @@ Resources:
                   - bedrock:InvokeModelWithResponseStream
                 Resource:
                   - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.anthropic.*
+                  - arn:aws:bedrock:*::foundation-model/anthropic.*
+              # Token counting on Bedrock upstreams (Claude Code >= 2.1.295). Without it the gateway
+              # falls back to a one-token InvokeModel request.
+              - Effect: Allow
+                Action: bedrock:CountTokens
+                Resource:
                   - arn:aws:bedrock:*::foundation-model/anthropic.*
         - PolicyName: read-config
           PolicyDocument:

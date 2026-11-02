@@ -325,7 +325,7 @@ init_run() {
   repos=$(_discover_ecr_repos)
   local IMAGE_URI=""
   if [ -z "$repos" ]; then
-    _init_warn "no ECR repositories in $REGION. Build + push the gateway image first (README §5)."
+    _init_warn "no ECR repositories in $REGION. Build + push the gateway image first (README, "Building and pushing the gateway image")."
     _prompt IMAGE_URI "IMAGE_URI (full ECR image URI incl. tag)" ""
   else
     IFS=$'\n' read -r -d '' -a repo_lines < <(printf '%s\0' "$repos") || true
@@ -368,7 +368,7 @@ init_run() {
   # 17-19. Rest
   _init_hdr "11. Upstream + collector"
   _prompt BEDROCK_REGION "BEDROCK_REGION (region for InvokeModel)" "$REGION"
-  _prompt OTEL_COLLECTOR_TAG "OTEL_COLLECTOR_TAG (pinned aws-otel-collector tag)" "v0.42.0"
+  _prompt OTEL_COLLECTOR_TAG "OTEL_COLLECTOR_TAG (pinned aws-otel-collector tag)" "v0.51.0"
   _prompt_yn __deploy_vpn "Deploy the Client VPN stack too?" n
   DEPLOY_VPN="$__deploy_vpn"
 

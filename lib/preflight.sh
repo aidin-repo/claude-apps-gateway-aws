@@ -108,7 +108,7 @@ preflight_run() {
   img_tag=$(printf '%s' "$IMAGE_URI" | awk -F: '{print $NF}')
   aws ecr describe-images --repository-name "$img_name" --image-ids imageTag="$img_tag" \
     --region "$REGION" >/dev/null 2>&1 \
-    || _pf_die "Image $IMAGE_URI not found in ECR. Build and push it first (see README §5)."
+    || _pf_die "Image $IMAGE_URI not found in ECR. Build and push it first (see README, "Building and pushing the gateway image")."
   _pf_ok "image $IMAGE_URI present in ECR"
 
   local stale=""
