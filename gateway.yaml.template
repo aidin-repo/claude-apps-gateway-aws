@@ -116,7 +116,7 @@ managed:
         # Remote MCP servers pushed to every matching Claude Code client (http/sse only, literal
         # values, no variable references). AWS MCP Server is AWS-managed; each user signs in with OAuth as
         # themselves, so no credential is stored here. Needs Claude Code >= 2.1.259 on the gateway
-        # image (Dockerfile pins 2.1.280). Users' IAM principal needs the AWS MCP sign-in policy.
+        # image (see the version pinned in the Dockerfile). Users' IAM principal needs the AWS MCP sign-in policy.
         managedMcpServers:
           aws-mcp:
             type: http
@@ -164,7 +164,7 @@ managed:
         # host code, or escalate into an agentic session.
         # Also the surface where MCP Apps widgets (interactive iframes returned by connectors)
         # render; Cowork does not appear to render them.
-        # Requires Claude Code >= 2.1.227 on the gateway server (Dockerfile pins 2.1.228).
+        # Requires Claude Code >= 2.1.227 on the gateway server (see the version pinned in the Dockerfile).
         chatTabEnabled: true
         # AWS MCP Server for Claude Desktop (Chat/Cowork). Desktop's managedMcpServers is an ARRAY
         # with a different entry shape than cli.managedMcpServers above (needs `transport`, and
